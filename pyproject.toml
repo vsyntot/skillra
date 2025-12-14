@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "skillra"
+version = "0.1.0"
+description = "Utilities and notebook helpers for the Skillra HSE Python for Data Analysis project"
+authors = [{name = "Skillra"}]
+requires-python = ">=3.9"
+readme = "README.md"
+dependencies = [
+    "pandas",
+    "numpy",
+    "matplotlib",
+    "pyarrow",
+    "seaborn",
+    "scikit-learn",
+    "nbformat",
+    "notebook",
+    "ipykernel",
+    "pytest",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
