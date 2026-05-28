@@ -2,7 +2,7 @@
 
 import pandas as pd
 
-from src.skillra_pda import personas
+from src.skillra_pda import config, personas
 
 
 def test_skill_gap_for_persona_marks_missing_and_existing_skills():
@@ -62,3 +62,11 @@ def test_build_skill_demand_profile_filters_and_sorts():
 
     assert list(demand["skill_name"]) == ["skill_sql", "skill_statistics", "has_python"]
     assert demand["market_share"].tolist() == [2 / 2, 2 / 2, 1 / 2]
+
+
+def test_load_noisy_skills_reads_yaml(tmp_path, monkeypatch):
+    noisy_skills_path = tmp_path / "noisy_skills.yaml"
+    noisy_skills_path.write_text("skills:\n  - skill_foo\n  - has_bar\n", encoding="utf-8")
+    monkeypatch.setattr(config, "NOISY_SKILLS_PATH", noisy_skills_path)
+
+    assert config.load_noisy_skills() == {"skill_foo", "has_bar"}

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "skillra"
 version = "0.1.0"
-description = "Utilities and notebook helpers for the Skillra HSE Python for Data Analysis project"
+description = "Skillra career and job market navigator analytics core"
 authors = [{name = "Skillra"}]
 requires-python = ">=3.9"
 readme = "README.md"
@@ -14,12 +14,22 @@ dependencies = [
     "numpy",
     "matplotlib",
     "pyarrow",
-    "seaborn",
-    "scikit-learn",
-    "nbformat",
+    "requests",
+    "beautifulsoup4",
+    "boto3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+    "pre-commit",
+]
+notebook = [
     "notebook",
     "ipykernel",
-    "pytest",
+    "nbformat",
+    "seaborn",
 ]
 
 [tool.setuptools]
@@ -27,3 +37,52 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+skillra_pda = ["skill_resources.yaml"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+extend-exclude = [
+    "data",
+    "reports",
+    "notebooks",
+    "parser",
+]
+
+[tool.ruff.lint]
+select = [
+    "E501",  # line length
+    "F401",  # unused imports
+    "F841",  # unused variables
+    "I001",  # unsorted imports
+    "I002",  # missing required imports in __all__
+    "T201",  # print statements
+]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*.py" = ["T201", "I001"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_return_any = false
+disable_error_code = [
+    "arg-type",
+    "assignment",
+    "call-arg",
+    "import-untyped",
+    "misc",
+    "no-any-return",
+    "operator",
+    "return-value",
+    "truthy-function",
+    "union-attr",
+]
+exclude = [
+    "alembic/",
+    "tests/",
+]

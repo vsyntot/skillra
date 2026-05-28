@@ -1,4 +1,5 @@
 """Data cleaning helpers for the Skillra PDA project."""
+
 from __future__ import annotations
 
 from typing import Dict, Iterable, List, Tuple
@@ -27,6 +28,10 @@ LOW_INFORMATION_WHITELIST = {
     "schedule",
     "city",
     "city_tier",
+    "country",
+    "region",
+    "city_normalized",
+    "geo_scope",
     "experience",
     "lang_english_level",
     "lang_english_required",
@@ -48,6 +53,10 @@ CATEGORICAL_IMPUTE_MAP: Dict[str, str] = {
     "employment_type": "unknown",
     "schedule": "unknown",
     "city_tier": "unknown",
+    "country": "unknown",
+    "region": "unknown",
+    "city_normalized": "unknown",
+    "geo_scope": "unknown",
     "lang_english_level": "unknown",
     "employer_type": "unknown",
 }
@@ -201,9 +210,7 @@ def is_boolean_like_series(series: pd.Series, null_markers: Iterable[str] | None
     return True
 
 
-def _drop_mostly_missing_columns(
-    df: pd.DataFrame, threshold: float = 0.95
-) -> Tuple[pd.DataFrame, List[str]]:
+def _drop_mostly_missing_columns(df: pd.DataFrame, threshold: float = 0.95) -> Tuple[pd.DataFrame, List[str]]:
     """Drop columns whose missingness exceeds the threshold."""
 
     missing_share = df.isna().mean()
@@ -451,9 +458,7 @@ def parse_dates(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def handle_missingness(
-    df: pd.DataFrame, drop_threshold: float = LOW_INFORMATION_THRESHOLD
-) -> pd.DataFrame:
+def handle_missingness(df: pd.DataFrame, drop_threshold: float = LOW_INFORMATION_THRESHOLD) -> pd.DataFrame:
     """Handle missing values using declarative sub-steps.
 
     The function standardizes textual unknown markers, drops
@@ -465,13 +470,9 @@ def handle_missingness(
     df = df.copy()
 
     df, normalized_unknown_cols = standardize_unknown_markers(df)
-    df, dropped_low_info, retained_low_info, low_info_table = drop_low_information_columns(
-        df, threshold=drop_threshold
-    )
+    df, dropped_low_info, retained_low_info, low_info_table = drop_low_information_columns(df, threshold=drop_threshold)
     df, bool_like_cols = _coerce_boolean_like_columns(df)
-    df, filled_categorical_cols = _fill_categorical_missing(
-        df, fill_map=CATEGORICAL_IMPUTE_MAP
-    )
+    df, filled_categorical_cols = _fill_categorical_missing(df, fill_map=CATEGORICAL_IMPUTE_MAP)
     df, filled_numeric_cols = _fill_numeric_missing(df, fill_map=NUMERIC_IMPUTE_RULES)
 
     low_info_report = low_info_table.to_dict(orient="records")
@@ -510,9 +511,7 @@ def ensure_salary_gross_boolean(df: pd.DataFrame) -> pd.DataFrame:
     if series.dtype == "object":
         series = series.replace(replacement_map)
 
-    coerced, _ = coerce_bool_like_series(
-        series, null_markers=BOOL_NULL_MARKERS, force=True
-    )
+    coerced, _ = coerce_bool_like_series(series, null_markers=BOOL_NULL_MARKERS, force=True)
     df["salary_gross"] = coerced.astype("boolean")
     return df
 
@@ -545,9 +544,7 @@ def summarize_data_health(df: pd.DataFrame, prefix: str = "") -> pd.DataFrame:
 
         marker_share = 0.0
         if dtype_str == "object" or dtype_str.startswith("category"):
-            marker_mask = series.apply(
-                lambda v: isinstance(v, str) and v.strip().lower() in markers_set
-            )
+            marker_mask = series.apply(lambda v: isinstance(v, str) and v.strip().lower() in markers_set)
             marker_share = float(marker_mask.mean())
 
         effective_missing_share = nan_share + (marker_share if marker_share else 0.0)
@@ -594,9 +591,7 @@ def summarize_data_health(df: pd.DataFrame, prefix: str = "") -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
-def list_low_information_columns(
-    df: pd.DataFrame, threshold: float = 0.90
-) -> pd.DataFrame:
+def list_low_information_columns(df: pd.DataFrame, threshold: float = 0.90) -> pd.DataFrame:
     """List columns whose effective missingness exceeds a threshold.
 
     Parameters
@@ -628,11 +623,7 @@ def list_low_information_columns(
         }
     )
     columns = ["column", "dtype", "na_share", "unknown_share", "effective_missing_share"]
-    return (
-        low_info[columns]
-        .sort_values(by="effective_missing_share", ascending=False)
-        .reset_index(drop=True)
-    )
+    return low_info[columns].sort_values(by="effective_missing_share", ascending=False).reset_index(drop=True)
 
 
 def drop_low_information_columns(
@@ -697,9 +688,7 @@ def salary_prepare(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df["salary_mid_rub_capped"] = df["salary_mid_rub"]
 
-    non_rub_share = (
-        df.get("currency").fillna("").ne("RUB").mean() if "currency" in df.columns else 0.0
-    )
+    non_rub_share = df.get("currency").fillna("").ne("RUB").mean() if "currency" in df.columns else 0.0
     df.attrs["non_rub_share"] = non_rub_share
     return df
 

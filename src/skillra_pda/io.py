@@ -1,6 +1,12 @@
 """Input/output helpers for the Skillra PDA project."""
+
+from __future__ import annotations
+
+import contextlib
+import os
+import tempfile
 from pathlib import Path
-from typing import Union
+from typing import Callable, Union
 
 import pandas as pd
 
@@ -87,6 +93,52 @@ def save_processed(df: pd.DataFrame, path: PathLike) -> None:
     df_to_save = _coerce_boollike_object_columns(df_to_save)
 
     if output_path.suffix.lower() == ".parquet":
-        df_to_save.to_parquet(output_path, index=False)
+        _atomic_write(output_path, lambda temp_path: df_to_save.to_parquet(temp_path, index=False))
     else:
-        df_to_save.to_csv(output_path, index=False)
+        _atomic_write(output_path, lambda temp_path: df_to_save.to_csv(temp_path, index=False))
+
+
+def _atomic_write(path: Path, writer: Callable[[Path], None]) -> None:
+    """Write a file atomically by using a temp file and replace."""
+    fd, temp_path = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=path.suffix,
+    )
+    os.close(fd)
+    temp_path_obj = Path(temp_path)
+
+    try:
+        writer(temp_path_obj)
+        _fsync_path(temp_path_obj)
+        os.replace(temp_path_obj, path)
+        _fsync_directory(path.parent)
+    except Exception:
+        with contextlib.suppress(FileNotFoundError):
+            temp_path_obj.unlink()
+        raise
+
+
+def _fsync_path(path: Path) -> None:
+    try:
+        with open(path, "rb") as handle:
+            os.fsync(handle.fileno())
+    except OSError:
+        return
+
+
+def _fsync_directory(path: Path) -> None:
+    try:
+        flags = os.O_DIRECTORY
+    except AttributeError:
+        return
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)

@@ -1,0 +1,35 @@
+# Sprint-009 TASK-11: DigestWorker alert rules
+groups:
+  - name: digest_worker
+    rules:
+      - alert: DigestWorkerNoClaims
+        expr: |
+          skillra_active_subscriptions > 0
+          and (absent(skillra_digest_worker_claimed_total)
+            or increase(skillra_digest_worker_claimed_total[2h]) == 0)
+        for: 20m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DigestWorker не забирает подписки"
+          description: "Есть активные подписки, но worker не claim'ил digest jobs за последние 2 часа"
+
+      - alert: DigestWorkerSendFailures
+        expr: |
+          increase(skillra_digest_worker_failed_total[30m]) > 3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DigestWorker часто не отправляет дайджесты"
+          description: "За 30 минут накопилось больше 3 worker-level ошибок доставки до успешной отправки"
+
+      - alert: DigestWorkerAckFailures
+        expr: |
+          increase(skillra_digest_worker_ack_failed_total[30m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DigestWorker не подтверждает доставку"
+          description: "Сообщение могло быть отправлено в Telegram, но ack в API не прошёл; есть риск повторной доставки"

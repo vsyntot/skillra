@@ -1,0 +1,37 @@
+groups:
+  - name: skillra-sprint-012
+    interval: 30s
+    rules:
+      - alert: DigestWorkerInactive
+        expr: |
+          absent(skillra_digest_worker_heartbeat_timestamp_seconds)
+          or (time() - skillra_digest_worker_heartbeat_timestamp_seconds) > 600
+        for: 5m
+        labels:
+          severity: warning
+          service: digest-worker
+        annotations:
+          summary: "DigestWorker heartbeat is stale"
+          description: "No fresh digest-worker heartbeat has been observed for more than 10 minutes. Check docker compose ps digest-worker and logs."
+
+      - alert: NoDigestsSentToday
+        expr: |
+          absent(skillra_digests_sent_total)
+          or increase(skillra_digests_sent_total[24h]) == 0
+        for: 1h
+        labels:
+          severity: warning
+          service: digest-worker
+        annotations:
+          summary: "No digests were sent in the last 24 hours"
+          description: "The digest delivery counter did not increase over 24 hours. Verify active subscriptions, digest-worker health, and API claim/ack endpoints."
+
+      - alert: MeiliSearchDown
+        expr: up{job="meilisearch"} == 0
+        for: 3m
+        labels:
+          severity: warning
+          service: meilisearch
+        annotations:
+          summary: "MeiliSearch is unavailable"
+          description: "The meilisearch Prometheus target is down. Search may be degraded or served by fallback paths."

@@ -1,4 +1,5 @@
 """Product-oriented persona utilities for Skillra."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -8,22 +9,14 @@ from typing import Any, Dict, List, Mapping, Sequence
 import pandas as pd
 
 from . import config, eda
+from .market import market_confidence
 from .viz import _format_filters, _humanize_skill_name
 
-
 MIN_MARKET_N = 80
-NOISY_SKILLS = {
-    # Служебные и шумные флаги, которые не должны доминировать в skill-gap
-    "has_test_task",
-    "has_relocation",
-    "has_metro",
-    "has_mentoring",
-    "skill_php",
-    "skill_javascript",
-    "skill_html",
-    "skill_css",
-    "skill_git",
-}
+# Sprint-007 TASK-15: Load noisy skills from YAML config instead of hardcoding
+from .config import load_noisy_skills  # noqa: E402 (import after constant)
+
+NOISY_SKILLS = load_noisy_skills()
 
 
 @dataclass
@@ -36,11 +29,17 @@ class Persona:
     target_role: str
     target_grade: str | None = None
     target_city_tier: str | None = None
+    target_country: str | None = None
+    target_region: str | None = None
+    target_city: str | None = None
+    target_geo_scope: str | None = None
     target_work_mode: str | None = None
     skill_whitelist: List[str] | None = None
     constraints: Dict[str, object] = field(default_factory=dict)
     goals: List[str] = field(default_factory=list)
     limitations: List[str] = field(default_factory=list)
+    min_market_n: int = MIN_MARKET_N
+    min_market_n: int = MIN_MARKET_N
 
     # Backward compatibility: expose target_filter as a property to avoid breaking old callers
     @property
@@ -52,6 +51,14 @@ class Persona:
             filt["grade"] = self.target_grade
         if self.target_city_tier:
             filt["city_tier"] = self.target_city_tier
+        if self.target_country:
+            filt["country"] = self.target_country
+        if self.target_region:
+            filt["region"] = self.target_region
+        if self.target_city:
+            filt["city_normalized"] = self.target_city
+        if self.target_geo_scope:
+            filt["geo_scope"] = self.target_geo_scope
         if self.target_work_mode:
             filt["work_mode"] = self.target_work_mode
         filt.update(self.constraints)
@@ -101,18 +108,20 @@ def _apply_filters(df: pd.DataFrame, filters: Sequence[tuple[str, object]]):
     return filtered, applied
 
 
-def _filter_by_target(
-    df: pd.DataFrame, persona: Persona, min_market_n: int | None = None
-) -> PersonaFilterResult:
+def _filter_by_target(df: pd.DataFrame, persona: Persona, min_market_n: int | None = None) -> PersonaFilterResult:
     """Filter a dataframe by persona targets and constraints with fallback."""
 
-    threshold = MIN_MARKET_N if min_market_n is None else min_market_n
+    threshold = persona.min_market_n if min_market_n is None else min_market_n
     grade_col = "grade_final" if "grade_final" in df.columns else "grade"
     filter_specs: list[tuple[str, object]] = []
     mapping: Mapping[str, Any] = {
         "primary_role": persona.target_role,
         grade_col: persona.target_grade,
         "city_tier": persona.target_city_tier,
+        "country": persona.target_country,
+        "region": persona.target_region,
+        "city_normalized": persona.target_city,
+        "geo_scope": persona.target_geo_scope,
         "work_mode": persona.target_work_mode,
     }
     for col, value in mapping.items():
@@ -129,11 +138,13 @@ def _filter_by_target(
     warnings: list[str] = []
 
     if threshold and filtered.empty:
-        warnings.append(
-            f"После применения фильтров сегмент пустой; порог стабильности {threshold} вакансий"
-        )
+        warnings.append(f"После применения фильтров сегмент пустой; порог стабильности {threshold} вакансий")
 
     relax_order: list[str] = list(persona.constraints.keys()) + [
+        "geo_scope",
+        "city_normalized",
+        "region",
+        "country",
         "work_mode",
         "city_tier",
         grade_col,
@@ -156,14 +167,9 @@ def _filter_by_target(
         filtered, applied = _apply_filters(df, active_filters)
 
     if threshold and len(filtered) < threshold:
-        warnings.append(
-            "Сегмент меньше минимального размера "
-            f"(n={len(filtered)}, min_market_n={threshold})."
-        )
+        warnings.append("Сегмент меньше минимального размера " f"(n={len(filtered)}, min_market_n={threshold}).")
     if relaxed_filters:
-        warnings.append(
-            "Ослаблены фильтры для стабильности: " + ", ".join(relaxed_filters)
-        )
+        warnings.append("Ослаблены фильтры для стабильности: " + ", ".join(relaxed_filters))
     if grade_relaxed:
         warnings.append("Фильтр по целевому грейду ослаблен из-за малого N рынка.")
 
@@ -204,9 +210,7 @@ def build_skill_demand_profile(
                 if col in df_filtered.columns and col.startswith(skill_prefixes)
             ]
             or [
-                c
-                for c in eda.hard_skill_columns(df_filtered)
-                if c.startswith(skill_prefixes) and c not in NOISY_SKILLS
+                c for c in eda.hard_skill_columns(df_filtered) if c.startswith(skill_prefixes) and c not in NOISY_SKILLS
             ]
         )
     )
@@ -258,9 +262,7 @@ def skill_gap_for_persona(
         demand = demand[demand["skill_name"].isin(skill_cols)]
 
     if demand.empty:
-        gap_df = pd.DataFrame(
-            columns=["skill_name", "market_share", "persona_has", "gap"]
-        )
+        gap_df = pd.DataFrame(columns=["skill_name", "market_share", "persona_has", "gap"])
         gap_df.attrs.update(
             {
                 "market_n": result.sample_size,
@@ -303,27 +305,53 @@ def analyze_persona(df: pd.DataFrame, persona: Persona, top_k: int = 10) -> dict
     * ``recommended_skills`` — ordered list of missing skills to focus on.
     """
 
-    filter_result = _filter_by_target(df, persona)
+    filter_result = _filter_by_target(df, persona, min_market_n=persona.min_market_n)
     df_filtered = filter_result.filtered_df
+    vacancy_count = len(df_filtered)
+    salary_col = next(
+        (col for col in ("salary_mid_rub_capped", "salary_mid_rub", "salary_mid") if col in df_filtered.columns),
+        None,
+    )
+    salary_series = pd.Series(dtype=float)
+    if salary_col:
+        salary_series = pd.to_numeric(df_filtered[salary_col], errors="coerce")
+        if "salary_disclosed" in df_filtered.columns:
+            salary_series = salary_series.where(df_filtered["salary_disclosed"].fillna(False).astype(bool))
+        salary_series = salary_series.dropna()
+    salary_sample_size = int(len(salary_series))
+    salary_coverage_share = round(salary_sample_size / vacancy_count, 6) if vacancy_count else None
+    confidence = market_confidence(vacancy_count, salary_sample_size, salary_coverage_share)
+    warnings = list(filter_result.warnings)
+    if confidence == "low":
+        warnings.append("Segment confidence is low; salary and demand metrics may be unstable.")
+
     market_summary: dict[str, object] = {
-        "vacancy_count": len(df_filtered),
+        "vacancy_count": vacancy_count,
+        "sample_size": vacancy_count,
+        "salary_sample_size": salary_sample_size,
+        "salary_coverage_share": salary_coverage_share,
+        "confidence": confidence,
         "min_market_n": filter_result.min_market_n,
     }
-    salary_col = "salary_mid_rub_capped" if "salary_mid_rub_capped" in df_filtered.columns else None
-    if salary_col:
+    if not salary_series.empty:
         market_summary.update(
             {
-                "salary_median": df_filtered[salary_col].median(),
-                "salary_q25": df_filtered[salary_col].quantile(0.25),
-                "salary_q75": df_filtered[salary_col].quantile(0.75),
+                "salary_median": float(salary_series.median()),
+                "salary_q25": float(salary_series.quantile(0.25)),
+                "salary_q75": float(salary_series.quantile(0.75)),
             }
         )
     if "is_remote" in df_filtered.columns:
         market_summary["remote_share"] = df_filtered["is_remote"].fillna(False).astype(bool).mean()
     if "is_junior_friendly" in df_filtered.columns:
-        market_summary["junior_friendly_share"] = (
-            df_filtered["is_junior_friendly"].fillna(False).astype(bool).mean()
-        )
+        market_summary["junior_friendly_share"] = df_filtered["is_junior_friendly"].fillna(False).astype(bool).mean()
+    if "geo_scope" in df_filtered.columns:
+        scopes = df_filtered["geo_scope"].dropna().astype(str)
+        unique_scopes = sorted({scope for scope in scopes if scope and scope != "unknown"})
+        if len(unique_scopes) == 1:
+            market_summary["geo_scope"] = unique_scopes[0]
+        elif len(unique_scopes) > 1:
+            market_summary["geo_scope"] = "mixed"
 
     demand_df = build_skill_demand_profile(
         df,
@@ -333,6 +361,10 @@ def analyze_persona(df: pd.DataFrame, persona: Persona, top_k: int = 10) -> dict
         filter_result=filter_result,
     )
     top_demand = demand_df.head(top_k) if not demand_df.empty else pd.DataFrame()
+
+    # Populate top_skills in market_summary from demand profile
+    top_skill_names: list[str] = demand_df["skill_name"].head(top_k).tolist() if not demand_df.empty else []
+    market_summary["top_skills"] = top_skill_names if top_skill_names else None
 
     gap_df = skill_gap_for_persona(
         df,
@@ -350,7 +382,7 @@ def analyze_persona(df: pd.DataFrame, persona: Persona, top_k: int = 10) -> dict
         "top_skill_demand": top_demand,
         "applied_filters": filter_result.applied_filters,
         "filters_used": filter_result.filters_used,
-        "warnings": filter_result.warnings,
+        "warnings": warnings,
         "grade_column_used": filter_result.grade_column_used,
     }
 

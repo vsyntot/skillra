@@ -1,0 +1,34 @@
+groups:
+  - name: bot
+    interval: 30s
+    rules:
+      - alert: DigestDeliveryStalled
+        expr: |
+          skillra_active_subscriptions > 0
+          and increase(skillra_digests_sent_total[2h]) == 0
+        for: 2h
+        labels:
+          severity: warning
+        annotations:
+          summary: "No successful digest deliveries for active subscriptions"
+          description: "Active weekly subscriptions exist, but skillra_digests_sent_total did not grow over 2 hours"
+
+      - alert: BotDown
+        expr: |
+          absent(container_last_seen{name=~".*skillra-bot.*"}) == 1
+          or (time() - max(container_last_seen{name=~".*skillra-bot.*"})) > 300
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Skillra Bot is down"
+          description: "skillra-bot has been unreachable for more than 2 minutes"
+
+      - alert: ActiveSubscriptionsDropped
+        expr: skillra_active_subscriptions < 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No active subscriptions"
+          description: "Active subscriptions count dropped to 0"

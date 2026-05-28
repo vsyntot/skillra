@@ -1,0 +1,308 @@
+(security_headers) {
+    header {
+        -Server
+        Strict-Transport-Security "max-age=31536000"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Content-Security-Policy "frame-ancestors 'none'"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=(), usb=()"
+        X-XSS-Protection "0"
+    }
+}
+
+skillra.ru {
+    import security_headers
+    encode zstd gzip
+
+    # Root domain serves the Skillra web SPA. API routes stay on the same
+    # origin so the frontend can call VITE_API_BASE_URL=https://skillra.ru.
+    header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://skillra.ru; img-src 'self' data:"
+
+    rate_limit {
+        zone api {
+            key {remote_ip}
+            events 300
+            window 1m
+        }
+    }
+
+    @docs {
+        path /docs* /redoc* /openapi.json
+    }
+    basicauth @docs {
+        {$CADDY_DOCS_BASIC_AUTH_USER} {$CADDY_DOCS_BASIC_AUTH_HASH}
+    }
+
+    @admin {
+        path /v1/admin*
+    }
+    basicauth @admin {
+        {$CADDY_ADMIN_BASIC_AUTH_USER} {$CADDY_ADMIN_BASIC_AUTH_HASH}
+    }
+
+    @internal {
+        path /internal/*
+    }
+
+    @api {
+        path /health /v1/* /docs* /redoc* /openapi.json
+    }
+
+    handle @internal {
+        respond 404
+    }
+
+    handle @api {
+        reverse_proxy prod-skillra-api:8000 {
+            lb_policy round_robin
+            # /health is liveness. Active upstream health uses strict readiness.
+            health_uri /v1/ready
+            health_interval 15s
+        }
+    }
+
+    handle {
+        # SPA fallback is handled by skillra-web nginx (infra/nginx.conf try_files).
+        reverse_proxy prod-skillra-web:80
+    }
+}
+
+tg.skillra.ru {
+    import security_headers
+    encode zstd gzip
+
+    rate_limit {
+        zone telegram {
+            key {remote_ip}
+            events 1200
+            window 1m
+        }
+    }
+
+    @alerts {
+        path /alerts
+    }
+
+    handle @alerts {
+        respond 404
+    }
+
+    reverse_proxy prod-skillra-bot:8080
+}
+
+staging.skillra.ru {
+    import security_headers
+    encode zstd gzip
+
+    header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://staging.skillra.ru; img-src 'self' data:"
+
+    rate_limit {
+        zone staging_api {
+            key {remote_ip}
+            events 300
+            window 1m
+        }
+    }
+
+    @docs {
+        path /docs* /redoc* /openapi.json
+    }
+    basicauth @docs {
+        {$CADDY_DOCS_BASIC_AUTH_USER} {$CADDY_DOCS_BASIC_AUTH_HASH}
+    }
+
+    @admin {
+        path /v1/admin*
+    }
+    basicauth @admin {
+        {$CADDY_ADMIN_BASIC_AUTH_USER} {$CADDY_ADMIN_BASIC_AUTH_HASH}
+    }
+
+    @internal {
+        path /internal/*
+    }
+
+    @api {
+        path /health /v1/* /docs* /redoc* /openapi.json
+    }
+
+    handle @internal {
+        respond 404
+    }
+
+    handle @api {
+        reverse_proxy staging-skillra-api:8000 {
+            health_uri /v1/ready
+            health_interval 15s
+        }
+    }
+
+    handle {
+        reverse_proxy staging-skillra-web:80
+    }
+}
+
+tg.staging.skillra.ru {
+    import security_headers
+    encode zstd gzip
+
+    rate_limit {
+        zone staging_telegram {
+            key {remote_ip}
+            events 1200
+            window 1m
+        }
+    }
+
+    @alerts {
+        path /alerts
+    }
+
+    handle @alerts {
+        respond 404
+    }
+
+    reverse_proxy staging-skillra-bot:8080
+}
+
+grafana.skillra.ru {
+    import security_headers
+    encode zstd gzip
+
+    rate_limit {
+        zone grafana {
+            key {remote_ip}
+            events 60
+            window 1m
+        }
+    }
+
+    basicauth {
+        {$CADDY_GRAFANA_BASIC_AUTH_USER} {$CADDY_GRAFANA_BASIC_AUTH_HASH}
+    }
+
+    reverse_proxy prod-grafana:3000
+}
+
+grafana.staging.skillra.ru {
+    import security_headers
+    encode zstd gzip
+
+    rate_limit {
+        zone staging_grafana {
+            key {remote_ip}
+            events 60
+            window 1m
+        }
+    }
+
+    basicauth {
+        {$CADDY_GRAFANA_BASIC_AUTH_USER} {$CADDY_GRAFANA_BASIC_AUTH_HASH}
+    }
+
+    reverse_proxy staging-grafana:3000
+}
+
+prometheus.skillra.ru {
+    import security_headers
+    encode zstd gzip
+
+    rate_limit {
+        zone prometheus {
+            key {remote_ip}
+            events 60
+            window 1m
+        }
+    }
+
+    basicauth {
+        {$CADDY_PROMETHEUS_BASIC_AUTH_USER} {$CADDY_PROMETHEUS_BASIC_AUTH_HASH}
+    }
+
+    reverse_proxy prod-prometheus:9090
+}
+
+prometheus.staging.skillra.ru {
+    import security_headers
+    encode zstd gzip
+
+    rate_limit {
+        zone staging_prometheus {
+            key {remote_ip}
+            events 60
+            window 1m
+        }
+    }
+
+    basicauth {
+        {$CADDY_PROMETHEUS_BASIC_AUTH_USER} {$CADDY_PROMETHEUS_BASIC_AUTH_HASH}
+    }
+
+    reverse_proxy staging-prometheus:9090
+}
+
+minio.skillra.ru {
+    import security_headers
+    encode zstd gzip
+
+    rate_limit {
+        zone minio {
+            key {remote_ip}
+            events 60
+            window 1m
+        }
+    }
+
+    basicauth {
+        {$CADDY_MINIO_BASIC_AUTH_USER} {$CADDY_MINIO_BASIC_AUTH_HASH}
+    }
+
+    reverse_proxy prod-minio:9001
+}
+
+minio.staging.skillra.ru {
+    import security_headers
+    encode zstd gzip
+
+    rate_limit {
+        zone staging_minio {
+            key {remote_ip}
+            events 60
+            window 1m
+        }
+    }
+
+    basicauth {
+        {$CADDY_MINIO_BASIC_AUTH_USER} {$CADDY_MINIO_BASIC_AUTH_HASH}
+    }
+
+    reverse_proxy staging-minio:9001
+}
+
+www.skillra.ru {
+    import security_headers
+    encode zstd gzip
+
+    redir https://skillra.ru{uri}
+}
+
+# Sprint-006 TASK-12: Web SPA — app.skillra.ru with SPA fallback
+app.skillra.ru {
+    import security_headers
+    encode zstd gzip
+
+    # Усиленный CSP для защиты X-Skillra-Token в localStorage (ADR-005)
+    header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://skillra.ru; img-src 'self' data:"
+
+    rate_limit {
+        zone web {
+            key {remote_ip}
+            events 200
+            window 1m
+        }
+    }
+
+    # SPA fallback is handled by skillra-web nginx (infra/nginx.conf try_files).
+    reverse_proxy prod-skillra-web:80
+}

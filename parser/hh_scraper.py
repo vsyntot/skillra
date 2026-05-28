@@ -1,7 +1,8 @@
 """Консольный скрапер IT-вакансий HH.ru.
 
-Собирает только вакансии с указанной зарплатой и выгружает расширенный
-CSV со структурированными полями. Парсер работает на BeautifulSoup и
+Собирает IT-вакансии HH.ru и выгружает расширенный CSV со структурированными
+полями. При необходимости сбор можно ограничить вакансиями с указанной
+зарплатой. Парсер работает на BeautifulSoup и
 включает обход типичных ограничений HH (ротация user-agent, опциональные
 прокси, джиттер задержек и HTTP-повторы).
 """
@@ -10,12 +11,28 @@ import argparse
 import csv
 import html as html_lib
 import json
+import logging
 import os
 import random
 import re
+import sys
 import time
-from datetime import datetime, timedelta, timezone
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from parser.job_source import (
+    CollectionReport,
+    CollectionRequest,
+    CollectionResult,
+    ShardResult,
+    compute_sha256,
+    write_collection_report,
+)
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import requests
@@ -23,6 +40,7 @@ from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+logger = logging.getLogger(__name__)
 
 SEARCH_URL = "https://hh.ru/search/vacancy"
 VACANCY_HOST = "https://hh.ru"
@@ -41,19 +59,17 @@ DEFAULT_AREA_IDS: Sequence[int] = (
     218,  # Turkmenistan
 )
 DEFAULT_QUERY = (
-    'NAME:('
+    "NAME:("
     # разработка / программирование / QA / data / ML
     'программист OR разработчик OR !developer OR "software engineer" '
     'OR "software developer" OR "инженер-программист" OR devops '
     'OR "data engineer" OR "data scientist" OR "ML engineer" '
     'OR тестировщик OR "QA engineer" OR "QA automation" '
     'OR "automation QA" OR "инженер по автоматизации тестирования" '
-    'OR тестир* '
-
+    "OR тестир* "
     # SRE / платформенные / инфраструктура
     'OR "site reliability engineer" OR SRE OR "platform engineer" '
     'OR "infrastructure engineer" OR "инженер инфраструктуры" '
-
     # сисадмины / сети / эксплуатация / support
     'OR "system administrator" OR "system engineer" '
     'OR "системный администратор" OR "сисадмин" OR "системный инженер" '
@@ -63,17 +79,14 @@ DEFAULT_QUERY = (
     'OR "специалист технической поддержки" OR "специалист техподдержки" '
     'OR "support engineer" OR "technical support engineer" '
     'OR "IT support engineer" OR "helpdesk engineer" '
-
     # базы данных / DBA
     'OR "администратор баз данных" OR "администратор БД" OR DBA '
     'OR "database administrator" OR "database engineer" '
-
     # информационная безопасность
     'OR "инженер по информационной безопасности" '
     'OR "инженер информационной безопасности" '
     'OR "специалист по информационной безопасности" '
     'OR "security engineer" OR DevSecOps '
-
     # data / BI / аналитика
     'OR "data analyst" OR "аналитик данных" OR "product analyst" '
     'OR "BI аналитик" OR "BI-аналитик" OR "BI analyst" '
@@ -81,12 +94,11 @@ DEFAULT_QUERY = (
     'OR "ETL разработчик" OR "ETL developer" OR "ETL-инженер" '
     'OR "ETL engineer" OR "DWH разработчик" OR "data warehouse developer" '
     'OR "системный аналитик" OR "system analyst" '
-
     # архитекторы
     'OR "solution architect" OR "software architect" OR "system architect" '
     'OR "архитектор решений" OR "архитектор ПО" '
     'OR "архитектор программного обеспечения" OR "архитектор ИТ" '
-    ')'
+    ")"
 )
 DEFAULT_LIMIT = 10000
 
@@ -232,7 +244,13 @@ DATA_SKILL_KEYWORDS = {
     "skill_airflow": ["airflow"],
     "skill_ab_testing": ["a/b", "ab test", "a/b тест", "a/b-тест"],
     "skill_product_metrics": [
-        "продуктов", "метрик", "конверси", "воронк", "ltv", "retention", "unit-эконом",
+        "продуктов",
+        "метрик",
+        "конверси",
+        "воронк",
+        "ltv",
+        "retention",
+        "unit-эконом",
     ],
 }
 
@@ -408,6 +426,8 @@ class VacancyRecord:
     domain_state: bool = field(default=False)
     domain_retail: bool = field(default=False)
     domain_it_product: bool = field(default=False)
+    dataset_scope: str = field(default="all_vacancies")
+    salary_disclosed: bool = field(default=False)
 
     def to_dict(self) -> Dict[str, Optional[str]]:
         return asdict(self)
@@ -438,10 +458,7 @@ def compute_salary_features(salary_from: Optional[int], salary_to: Optional[int]
 
 
 def extract_address_features(address: str) -> Tuple[bool, str, int, bool]:
-    metro_matches = [
-        m.strip()
-        for m in re.findall(r"(?:м\\.|метро)\s*([^,;]+)", address, flags=re.IGNORECASE)
-    ]
+    metro_matches = [m.strip() for m in re.findall(r"(?:м\\.|метро)\s*([^,;]+)", address, flags=re.IGNORECASE)]
     has_metro = bool(metro_matches)
     metro_primary = metro_matches[0] if metro_matches else ""
     metro_count = len(metro_matches)
@@ -544,7 +561,16 @@ def parse_language_requirements(full_text: str) -> Dict[str, Optional[object]]:
         english_level = "none"
 
     other_languages = [
-        "немец", "german", "китай", "chinese", "француз", "french", "испан", "spanish", "итальян", "italian",
+        "немец",
+        "german",
+        "китай",
+        "chinese",
+        "француз",
+        "french",
+        "испан",
+        "spanish",
+        "итальян",
+        "italian",
     ]
     other_count = sum(1 for kw in other_languages if kw in lowered)
 
@@ -684,9 +710,7 @@ def normalize_published_at(raw_text: str, now: datetime) -> Tuple[Optional[str],
                     day = int(match.group(1))
                     month_name = match.group(2)
                     year = int(match.group(3)) if match.group(3) else now.year
-                    month = next(
-                        (val for key, val in month_map.items() if key in month_name), None
-                    )
+                    month = next((val for key, val in month_map.items() if key in month_name), None)
                     if month:
                         pub_date = datetime(year, month, day, tzinfo=now.tzinfo)
     if pub_date:
@@ -698,12 +722,8 @@ def normalize_published_at(raw_text: str, now: datetime) -> Tuple[Optional[str],
 
 def detect_junior_friendly_signals(full_text: str, exp_is_no_experience: bool) -> Dict[str, Optional[bool]]:
     lowered = full_text.lower()
-    is_junior = any(
-        kw in lowered for kw in ["junior", "стаж", "intern", "младший", "джун"]
-    ) or exp_is_no_experience
-    allows_students = any(
-        kw in lowered for kw in ["студент", "подходит для студентов", "без полного высшего"]
-    )
+    is_junior = any(kw in lowered for kw in ["junior", "стаж", "intern", "младший", "джун"]) or exp_is_no_experience
+    allows_students = any(kw in lowered for kw in ["студент", "подходит для студентов", "без полного высшего"])
     has_mentoring = "ментор" in lowered or "наставнич" in lowered
     has_test_task = any(kw in lowered for kw in ["тестовое задание", "test task", "coding challenge"])
     return {
@@ -718,7 +738,12 @@ def classify_work_format(full_text: str, description_text: str) -> Tuple[str, st
     match_fmt = re.search(r"Формат работы:\s*([^\n]+)", full_text)
     work_format_raw = match_fmt.group(1).strip() if match_fmt else ""
     combined_text = f"{full_text}\n{description_text}".lower()
-    is_remote = "удал" in work_format_raw.lower() or "удал" in combined_text or "можно удаленно" in combined_text or "можно удалённо" in combined_text
+    is_remote = (
+        "удал" in work_format_raw.lower()
+        or "удал" in combined_text
+        or "можно удаленно" in combined_text
+        or "можно удалённо" in combined_text
+    )
     is_hybrid = "гибрид" in work_format_raw.lower() or "hybrid" in combined_text
     if is_remote:
         work_format = "remote"
@@ -874,12 +899,21 @@ def parse_employer_page(employer_html: str) -> Dict[str, Optional[object]]:
         if unescaped != raw_html:
             variants.append(unescaped)
         if "\\" in raw_html:
-            variants.append(raw_html.replace("\\/", "/"))
-            variants.append(raw_html.replace("\\\"", '"'))
-            try:
-                variants.append(raw_html.encode("utf-8").decode("unicode_escape", errors="ignore"))
-            except UnicodeDecodeError:
-                pass
+            json_unescaped = raw_html.replace("\\/", "/").replace('\\"', '"')
+            for escaped, replacement in (
+                ("\\n", "\n"),
+                ("\\r", "\r"),
+                ("\\t", "\t"),
+                ("\\b", "\b"),
+                ("\\f", "\f"),
+            ):
+                json_unescaped = json_unescaped.replace(escaped, replacement)
+            json_unescaped = re.sub(
+                r"\\u([0-9a-fA-F]{4})",
+                lambda match: chr(int(match.group(1), 16)),
+                json_unescaped,
+            )
+            variants.append(json_unescaped)
         # Deduplicate while preserving order
         seen_variants: List[str] = []
         for variant in variants:
@@ -1062,9 +1096,7 @@ def parse_employer_page(employer_html: str) -> Dict[str, Optional[object]]:
     employer_accredited_it: Optional[bool] = None
     employer_type: Optional[str] = None
 
-    advantages_block = re.search(
-        r'"advantages"\s*:\s*(\[[^\]]+\])', employer_html
-    )
+    advantages_block = re.search(r'"advantages"\s*:\s*(\[[^\]]+\])', employer_html)
     if advantages_block:
         try:
             items = json.loads(advantages_block.group(1))
@@ -1084,9 +1116,7 @@ def parse_employer_page(employer_html: str) -> Dict[str, Optional[object]]:
     elif "аккредитован" in full_text.lower():
         employer_accredited_it = True
 
-    employer_type_text = extract_text(
-        soup.select_one("[data-qa='employer-type']")
-    ).lower()
+    employer_type_text = extract_text(soup.select_one("[data-qa='employer-type']")).lower()
     if not employer_type_text:
         employer_type_text = full_text.lower()
     if "прямой работодатель" in employer_type_text:
@@ -1187,33 +1217,40 @@ def parse_search_page(html: str) -> List[str]:
 
 
 def parse_vacancy_page(
-    html: str, url: str, area_id: int, scraped_at: datetime
+    html: str,
+    url: str,
+    area_id: int,
+    scraped_at: datetime,
+    *,
+    require_salary: bool = False,
+    dataset_scope: str = "all_vacancies",
 ) -> Optional[VacancyRecord]:
     soup = BeautifulSoup(html, "html.parser")
     title = extract_text(soup.select_one("h1[data-qa='vacancy-title']"))
     salary_block = soup.select_one("div[data-qa='vacancy-salary']")
     salary_text = extract_text(salary_block)
-    salary_data = parse_salary(salary_text) if salary_text else {
-        "salary_from": None,
-        "salary_to": None,
-        "currency": None,
-        "salary_gross": None,
-    }
-    if not (salary_data["salary_from"] or salary_data["salary_to"]):
+    salary_data = (
+        parse_salary(salary_text)
+        if salary_text
+        else {
+            "salary_from": None,
+            "salary_to": None,
+            "currency": None,
+            "salary_gross": None,
+        }
+    )
+    salary_disclosed = bool(salary_data["salary_from"] or salary_data["salary_to"])
+    if require_salary and not salary_disclosed:
         return None
 
-    salary_features = compute_salary_features(
-        salary_data["salary_from"], salary_data["salary_to"]
-    )
+    salary_features = compute_salary_features(salary_data["salary_from"], salary_data["salary_to"])
 
     company_anchor = soup.select_one("a[data-qa='vacancy-company-name']")
     company = extract_text(company_anchor)
     employer_url = company_anchor.get("href") if company_anchor else ""
 
     address = extract_text(
-        soup.select_one(
-            "span[data-qa='vacancy-view-raw-address'], span[data-qa='vacancy-view-location']"
-        )
+        soup.select_one("span[data-qa='vacancy-view-raw-address'], span[data-qa='vacancy-view-location']")
     )
     city = address.split(",")[0] if address else "Москва"
     has_metro, metro_primary, metro_count, address_has_district = extract_address_features(address)
@@ -1226,14 +1263,14 @@ def parse_vacancy_page(
         r"(Полная занятость|Частичная занятость|Стажировка|Проектная работа|Волонтёрство)",
         full_text,
     )
-    employment = employment_match.group(1) if employment_match else extract_text(
-        soup.select_one("p[data-qa='vacancy-view-employment-mode']")
+    employment = (
+        employment_match.group(1)
+        if employment_match
+        else extract_text(soup.select_one("p[data-qa='vacancy-view-employment-mode']"))
     )
 
     description_node = soup.select_one("div[data-qa='vacancy-description']")
-    description = (
-        description_node.get_text("\n\n", strip=True) if description_node else ""
-    )
+    description = description_node.get_text("\n\n", strip=True) if description_node else ""
     description_html = description_node.decode_contents() if description_node else ""
     work_format_raw, work_format, is_remote, is_hybrid, schedule_from_text = classify_work_format(
         full_text, description
@@ -1251,7 +1288,9 @@ def parse_vacancy_page(
     desc_len_chars, desc_len_words, desc_bullets, desc_paragraphs = description_stats(description)
 
     sections = split_description_sections(description_html)
-    requirements_count = count_bullets_in_lines(sections["requirements"].splitlines()) if sections["requirements"] else 0
+    requirements_count = (
+        count_bullets_in_lines(sections["requirements"].splitlines()) if sections["requirements"] else 0
+    )
     responsibilities_count = count_bullets_in_lines(sections["duties"].splitlines()) if sections["duties"] else 0
 
     combined_text = f"{title}\n{description}\n{skills_str}".lower()
@@ -1269,12 +1308,8 @@ def parse_vacancy_page(
     language_info = parse_language_requirements(f"{title}\n{description}")
     junior_info = detect_junior_friendly_signals(combined_text, exp_is_no_experience)
 
-    must_have_skills_count = count_skill_hits(
-        sections.get("requirements", ""), tech_flags, data_skill_info
-    )
-    optional_skills_count = count_skill_hits(
-        sections.get("nice_to_have", ""), tech_flags, data_skill_info
-    )
+    must_have_skills_count = count_skill_hits(sections.get("requirements", ""), tech_flags, data_skill_info)
+    optional_skills_count = count_skill_hits(sections.get("nice_to_have", ""), tech_flags, data_skill_info)
 
     vacancy_id_match = re.search(r"vacancy/(\d+)", url)
     vacancy_id = vacancy_id_match.group(1) if vacancy_id_match else ""
@@ -1423,6 +1458,8 @@ def parse_vacancy_page(
         domain_state=domain_flags.get("domain_state", False),
         domain_retail=domain_flags.get("domain_retail", False),
         domain_it_product=domain_flags.get("domain_it_product", False),
+        dataset_scope=dataset_scope,
+        salary_disclosed=salary_disclosed,
     )
 
 
@@ -1446,6 +1483,36 @@ def fetch(session: requests.Session, url: str, headers: Dict[str, str]) -> Optio
     return response.text
 
 
+def build_search_params(
+    *,
+    query: str,
+    area_id: int,
+    page: int,
+    salary_only: bool,
+    exp_filter: str | None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> dict[str, object]:
+    """Build HH search params for one area/experience/page shard."""
+
+    params: dict[str, object] = {
+        "text": query,
+        "area": area_id,
+        "page": page,
+        "items_on_page": 20,
+        "order_by": "publication_time",
+    }
+    if salary_only:
+        params["only_with_salary"] = "true"
+    if exp_filter:
+        params["experience"] = exp_filter
+    if date_from:
+        params["date_from"] = date_from
+    if date_to:
+        params["date_to"] = date_to
+    return params
+
+
 def scrape(
     query: str = DEFAULT_QUERY,
     limit: int = DEFAULT_LIMIT,
@@ -1454,6 +1521,10 @@ def scrape(
     max_pages: Optional[int] = None,
     proxy_list: Optional[List[str]] = None,
     area_ids: Optional[Sequence[int]] = None,
+    salary_only: bool = False,
+    dataset_scope: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
 ) -> List[VacancyRecord]:
     os.makedirs(os.path.dirname(output), exist_ok=True)
     collected: List[VacancyRecord] = []
@@ -1463,6 +1534,7 @@ def scrape(
     employer_cache: Dict[str, Dict[str, Optional[object]]] = {}
     area_ids = list(area_ids) if area_ids is not None else list(DEFAULT_AREA_IDS)
     scraped_at = datetime.now(timezone.utc)
+    resolved_dataset_scope = dataset_scope or ("salary_disclosed" if salary_only else "all_vacancies")
 
     for area_id in area_ids:
         for exp_filter in EXPERIENCE_SHARDS:
@@ -1478,42 +1550,53 @@ def scrape(
                     "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
                     "Referer": "https://hh.ru/",
                 }
-                params = {
-                    "text": query,
-                    "area": area_id,
-                    "only_with_salary": "true",
-                    "page": page,
-                    "items_on_page": 20,
-                    "order_by": "publication_time",
-                }
-                if exp_filter:
-                    params["experience"] = exp_filter
-                print(
-                    f"[area={area_id} exp={shard_label} page={page}] получаем результаты поиска через прокси={proxy}"
+                params = build_search_params(
+                    query=query,
+                    area_id=area_id,
+                    page=page,
+                    salary_only=salary_only,
+                    exp_filter=exp_filter,
+                    date_from=date_from,
+                    date_to=date_to,
+                )
+                logger.info(
+                    "Fetching HH search page area=%s exp=%s page=%s proxy=%s",
+                    area_id,
+                    shard_label,
+                    page,
+                    proxy,
                 )
                 search_response = session.get(SEARCH_URL, params=params, headers=headers, timeout=20)
                 if search_response.status_code == 404:
-                    print("Поисковая страница вернула 404 (скорее всего лимит пагинации), переходим к следующему шару")
+                    logger.info("HH search page returned 404, moving to next shard")
                     break
                 if search_response.status_code >= 400:
-                    print(
-                        f"Ошибка запроса поисковой страницы {search_response.status_code}, переключаем прокси"
+                    logger.warning(
+                        "HH search page returned status=%s, rotating proxy",
+                        search_response.status_code,
                     )
                     proxy_index += 1
                     time.sleep(delay)
                     continue
                 links = parse_search_page(search_response.text)
                 if not links:
-                    print("В этом шаре вакансий больше не найдено, останавливаем пагинацию.")
+                    logger.info("No more vacancies found in HH shard")
                     break
 
                 for link in links:
                     headers["User-Agent"] = pick_user_agent()
                     html = fetch(session, link, headers=headers)
                     if not html:
-                        print(f"Пропускаем {link} из-за ошибки загрузки")
+                        logger.warning("Skipping HH vacancy due to load error url=%s", link)
                         continue
-                    record = parse_vacancy_page(html, link, area_id=area_id, scraped_at=scraped_at)
+                    record = parse_vacancy_page(
+                        html,
+                        link,
+                        area_id=area_id,
+                        scraped_at=scraped_at,
+                        require_salary=salary_only,
+                        dataset_scope=resolved_dataset_scope,
+                    )
                     if not record:
                         continue
                     if record.vacancy_id in seen_vacancy_ids:
@@ -1535,7 +1618,7 @@ def scrape(
                     apply_employer_info(record, employer_info)
                     collected.append(record)
                     if len(collected) % 50 == 0:
-                        print(f"Собрано {len(collected)} вакансий")
+                        logger.info("Collected HH vacancies count=%s", len(collected))
                     if len(collected) >= limit:
                         break
                     time.sleep(delay + random.uniform(0, delay))
@@ -1553,13 +1636,76 @@ def scrape(
     return collected
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Скрапинг IT-вакансий HH.ru с указанной зарплатой через BeautifulSoup "
-            "и сохранение в CSV."
+class HHHtmlSourceAdapter:
+    """Job source adapter that collects vacancies from HH.ru HTML pages."""
+
+    source_mode = "hh_html"
+
+    def collect(self, request: CollectionRequest) -> CollectionResult:
+        started = datetime.now(timezone.utc)
+        monotonic_start = time.monotonic()
+        try:
+            records = scrape(
+                query=request.query,
+                limit=request.limit,
+                output=str(request.output_path),
+                delay=request.delay,
+                max_pages=request.max_pages,
+                proxy_list=list(request.proxy_list),
+                area_ids=request.area_ids or None,
+                salary_only=request.salary_only,
+                dataset_scope=request.dataset_scope,
+                date_from=request.date_from,
+                date_to=request.date_to,
+            )
+        except Exception as exc:
+            finished = datetime.now(timezone.utc)
+            report = CollectionReport(
+                source_mode=self.source_mode,
+                adapter_name=self.__class__.__name__,
+                status="failed",
+                started_at_utc=started.isoformat(),
+                finished_at_utc=finished.isoformat(),
+                duration_sec=round(time.monotonic() - monotonic_start, 2),
+                requested_limit=request.limit,
+                row_count=0,
+                output_path=str(request.output_path),
+                dataset_scope=request.dataset_scope,
+                salary_only=request.salary_only,
+                errors=[str(exc)],
+            )
+            write_collection_report(request.collection_report_path, report)
+            raise
+
+        finished = datetime.now(timezone.utc)
+        row_count = len(records)
+        report = CollectionReport(
+            source_mode=self.source_mode,
+            adapter_name=self.__class__.__name__,
+            status="success",
+            started_at_utc=started.isoformat(),
+            finished_at_utc=finished.isoformat(),
+            duration_sec=round(time.monotonic() - monotonic_start, 2),
+            requested_limit=request.limit,
+            row_count=row_count,
+            output_path=str(request.output_path),
+            sha256=compute_sha256(request.output_path) if request.output_path.exists() else None,
+            dataset_scope=request.dataset_scope,
+            salary_only=request.salary_only,
+            shard_results=[
+                ShardResult(
+                    source_mode=self.source_mode,
+                    pages_requested=request.max_pages or 0,
+                    records_collected=row_count,
+                )
+            ],
         )
-    )
+        write_collection_report(request.collection_report_path, report)
+        return CollectionResult(records=records, output_path=request.output_path, report=report)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=("Скрапинг IT-вакансий HH.ru через BeautifulSoup и сохранение в CSV."))
     parser.add_argument(
         "--query",
         default=DEFAULT_QUERY,
@@ -1585,9 +1731,37 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=list(DEFAULT_AREA_IDS),
         help=(
-            "area_id HH для поиска (например, 113 Россия, 1 Москва, 2 Санкт-Петербург, "
-            "40 Беларусь, 159 Казахстан)"
+            "area_id HH для поиска (например, 113 Россия, 1 Москва, 2 Санкт-Петербург, " "40 Беларусь, 159 Казахстан)"
         ),
+    )
+    parser.add_argument(
+        "--salary-only",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Ограничить сбор вакансиями с указанной зарплатой.",
+    )
+    parser.add_argument(
+        "--dataset-scope",
+        default=None,
+        help=(
+            "Явная метка охвата датасета в выходном CSV. По умолчанию: "
+            "all_vacancies или salary_disclosed в зависимости от --salary-only."
+        ),
+    )
+    parser.add_argument(
+        "--date-from",
+        default=None,
+        help="HH publication lower bound, for example 2025-12-01T00:00:00.",
+    )
+    parser.add_argument(
+        "--date-to",
+        default=None,
+        help="HH publication upper bound, for example 2025-12-01T23:59:59.",
+    )
+    parser.add_argument(
+        "--collection-report",
+        default=None,
+        help="Optional JSON path for source collection report.",
     )
     return parser.parse_args()
 
@@ -1595,16 +1769,25 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     proxies = load_proxies(args.proxies)
-    records = scrape(
-        query=args.query,
-        limit=args.limit,
-        output=args.output,
-        delay=args.delay,
-        max_pages=args.max_pages,
-        proxy_list=proxies,
-        area_ids=args.areas,
+    dataset_scope = args.dataset_scope or ("salary_disclosed" if args.salary_only else "all_vacancies")
+    result = HHHtmlSourceAdapter().collect(
+        CollectionRequest(
+            query=args.query,
+            limit=args.limit,
+            output_path=Path(args.output),
+            dataset_scope=dataset_scope,
+            salary_only=args.salary_only,
+            delay=args.delay,
+            max_pages=args.max_pages,
+            proxy_list=tuple(proxies),
+            area_ids=tuple(args.areas),
+            date_from=args.date_from,
+            date_to=args.date_to,
+            collection_report_path=Path(args.collection_report) if args.collection_report else None,
+        )
     )
-    print(f"Сохранено {len(records)} строк в {args.output}")
+    records = result.records
+    logger.info("Saved %s rows to %s", len(records), args.output)
 
 
 if __name__ == "__main__":

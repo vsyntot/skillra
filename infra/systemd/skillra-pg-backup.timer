@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Skillra Postgres backup daily
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 UTC
+Persistent=true
+RandomizedDelaySec=5m
+Unit=skillra-pg-backup.service
+
+[Install]
+WantedBy=timers.target

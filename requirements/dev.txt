@@ -1,0 +1,10 @@
+pytest
+ruff==0.6.8
+pre-commit>=3.7
+pip-tools==7.4.1
+mypy>=1.10
+types-requests
+# Security minimum versions (CVE fixes validated by CI pip-audit)
+filelock>=3.20.3
+# security pin (pip-audit)
+virtualenv>=20.36.1

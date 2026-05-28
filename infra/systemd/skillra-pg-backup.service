@@ -1,0 +1,12 @@
+[Unit]
+Description=Skillra Postgres backup to S3
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/skillra_hse_pda
+Environment=SKILLRA_REPO_DIR=/opt/skillra_hse_pda
+Environment=PG_BACKUP_RETENTION_DAYS=7
+LogsDirectory=skillra
+ExecStart=/usr/bin/bash -lc '/opt/skillra_hse_pda/scripts/prod_pg_backup.sh >> /var/log/skillra/pg-backup.log 2>&1'

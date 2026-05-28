@@ -1,0 +1,29 @@
+groups:
+  - name: skillra-pipeline
+    rules:
+      - alert: SkillraPipelineLastSuccessTooOld
+        expr: (time() - skillra_pipeline_last_success_timestamp_seconds) > 93600
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Skillra pipeline last success too old"
+          description: "No successful pipeline run for more than 26 hours."
+
+      - alert: SkillraPostgresBackupMissingOrStale
+        expr: absent(skillra_pg_backup_last_success_timestamp_seconds) == 1 or (time() - skillra_pg_backup_last_success_timestamp_seconds) > 93600
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Skillra Postgres backup missing or stale"
+          description: "No successful Postgres backup metric for more than 26 hours, or the backup freshness metric is absent."
+
+      - alert: SkillraPostgresRestoreDrillMissingOrStale
+        expr: absent(skillra_pg_restore_drill_last_success_timestamp_seconds) == 1 or (time() - skillra_pg_restore_drill_last_success_timestamp_seconds) > 604800
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Skillra Postgres restore drill missing or stale"
+          description: "No successful Postgres restore drill metric for more than 7 days, or the restore drill freshness metric is absent."

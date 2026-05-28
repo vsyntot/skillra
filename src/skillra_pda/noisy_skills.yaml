@@ -1,0 +1,12 @@
+# Шумные навыки — исключаются из skill-gap анализа
+# Sprint-007 TASK-15: вынесен из personas.py в конфиг-файл
+skills:
+  - has_test_task
+  - has_relocation
+  - has_metro
+  - has_mentoring
+  - skill_php
+  - skill_javascript
+  - skill_html
+  - skill_css
+  - skill_git

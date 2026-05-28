@@ -1,6 +1,6 @@
 # Скрапер вакансий HH.ru (Россия + СНГ по умолчанию)
 
-Скрипт `hh_scraper.py` собирает вакансии в сфере IT по hh.ru, оставляя только позиции с указанной зарплатой. Парсинг основан на BeautifulSoup, данные сохраняются в CSV (по умолчанию `data/hh_moscow_it_YYYY_MM_DD_HH_MM_SS.csv`) с расширенным набором признаков на вакансию (зарплатные производные, опыт, формат работы, грейд, роли, стек, бенефиты, статистика текста, фичи работодателя). По умолчанию обходятся все страны СНГ (Россия, Беларусь, Казахстан, Армения, Украина, Азербайджан, Узбекистан, Киргизстан, Молдова, Грузия, Таджикистан, Туркмения) — при желании можно ограничиться конкретными `area_id` через флаг `--areas`.
+Скрипт `hh_scraper.py` собирает вакансии в сфере IT по hh.ru. По умолчанию он сохраняет весь найденный срез вакансий, включая позиции без указанной зарплаты; для старого salary-only режима используйте `--salary-only`. Парсинг основан на BeautifulSoup, данные сохраняются в CSV (по умолчанию `data/hh_moscow_it_YYYY_MM_DD_HH_MM_SS.csv`) с расширенным набором признаков на вакансию (зарплатные производные, опыт, формат работы, грейд, роли, стек, бенефиты, статистика текста, фичи работодателя). По умолчанию обходятся все страны СНГ (Россия, Беларусь, Казахстан, Армения, Украина, Азербайджан, Узбекистан, Киргизстан, Молдова, Грузия, Таджикистан, Туркмения) — при желании можно ограничиться конкретными `area_id` через флаг `--areas`.
 
 Полный перечень собираемых полей и их описания приведён в [DATA_DICTIONARY.md](DATA_DICTIONARY.md).
 
@@ -29,6 +29,8 @@ python hh_scraper.py
 - `--max-pages` — ограничение глубины пагинации для тестов.
 - `--proxies` — путь к файлу со списком прокси (`scheme://user:pass@host:port`, по одному на строку), используется для ротации.
 - `--areas` — список `area_id` (по умолчанию все страны СНГ: 113, 40, 159, 160, 5, 204, 237, 246, 111, 51, 194, 218). Можно указать, например, `--areas 1 2` для Москвы+СПб.
+- `--salary-only` — ограничить сбор вакансиями с указанной зарплатой и пометить датасет как `salary_disclosed`.
+- `--dataset-scope` — явно задать метку охвата датасета в CSV.
 
 Пример с настройками и прокси:
 
@@ -42,7 +44,7 @@ python hh_scraper.py --query "Python разработчик" --limit 12000 \
 Для каждой вакансии сохраняются ключевые группы признаков:
 
 - Идентификаторы и ссылки: `vacancy_id`, `vacancy_url`, `employer_url`, `vacancy_code`.
-- Зарплата: `salary_from`, `salary_to`, `currency`, `salary_gross`, производные `salary_mid`, `salary_range_width`, `salary_is_exact`.
+- Зарплата: `salary_from`, `salary_to`, `currency`, `salary_gross`, производные `salary_mid`, `salary_range_width`, `salary_is_exact`, флаг `salary_disclosed`.
 - Локация: `city`, `address`, фичи метро (`has_metro`, `metro_primary`, `metro_count`), `address_has_district`.
 - Опыт: `experience`, числовые `exp_min_years`, `exp_max_years`, флаг `exp_is_no_experience`.
 - Занятость и формат: `employment_type`, `schedule`, `work_format_raw`, классификация `work_format`, флаги `is_remote`, `is_hybrid`.
@@ -51,6 +53,7 @@ python hh_scraper.py --query "Python разработчик" --limit 12000 \
 - Технологический стек: булевы флаги `has_python`, `has_java`, `has_kotlin`, `has_csharp`, `has_cpp`, `has_go`, `has_php`, `has_javascript`, `has_typescript`, `has_scala`, `has_rust`, `has_ruby`, `has_django`, `has_flask`, `has_fastapi`, `has_dotnet`, `has_spring`, `has_nodejs`, `has_express`, `has_nestjs`, `has_react`, `has_vue`, `has_angular`, `has_nextjs`, `has_nuxt`, `has_svelte`, `has_pandas`, `has_numpy`, `has_sklearn`, `has_pytorch`, `has_tensorflow`, `has_airflow`, `has_spark`, `has_kafka`, `has_docker`, `has_kubernetes`, `has_terraform`, `has_ansible`, `has_jenkins`, `has_gitlab_ci`, `has_cicd`.
 - Бенефиты: `benefit_dms`, `benefit_insurance`, `benefit_sick_leave_paid`, `benefit_vacation_paid`, `benefit_relocation`, `benefit_sport`, `benefit_education`, `benefit_remote_compensation`, `benefit_stock`.
 - Работодатель: `employer_rating`, `employer_reviews_count`, `employer_has_remote`, `employer_has_flexible_schedule`, `employer_has_med_insurance`, `employer_has_education`, `employer_accredited_it`, `employer_type`.
+- Охват датасета: `dataset_scope` (`all_vacancies` или `salary_disclosed`).
 
 ## Обход ограничений HH
 

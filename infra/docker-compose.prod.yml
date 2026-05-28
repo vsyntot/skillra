@@ -1,0 +1,625 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  skillra-api:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.api
+    command: uvicorn skillra_api.main:app --host 0.0.0.0 --port ${SKILLRA_API_PORT:-8000} --workers 1
+    env_file:
+      - ${SKILLRA_COMPOSE_ENV_FILE:-../.env.prod}
+    environment:
+      SKILLRA_API_HOST: 0.0.0.0
+      SKILLRA_API_PORT: ${SKILLRA_API_PORT:-8000}
+      SKILLRA_DATA_DIR: /workspace/data/processed/latest
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://skillra:skillra@postgres:5432/skillra}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      MEILISEARCH_URL: http://meilisearch:7700
+      MEILISEARCH_API_KEY: ${MEILISEARCH_API_KEY:-masterKey}
+      MINIO_ENDPOINT_URL: ${MINIO_ENDPOINT_URL:-http://prod-minio:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-skillra-api}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-changeme-api-s3-password}
+      MINIO_BUCKET_RESUMES: ${MINIO_BUCKET_RESUMES:-skillra-resumes}
+      MINIO_BUCKET_REPORTS: ${MINIO_BUCKET_REPORTS:-skillra-reports}
+    volumes:
+      - ${SKILLRA_DATA_VOLUME_BASE:-/var/lib/skillra}/processed:/workspace/data/processed:ro
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    deploy:
+      replicas: ${SKILLRA_API_REPLICAS:-2}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+      meilisearch:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${SKILLRA_API_PORT:-8000}/health', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      default:
+        aliases:
+          - prod-skillra-api
+          - skillra_api
+
+  caddy:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.caddy
+    env_file:
+      - ${SKILLRA_COMPOSE_ENV_FILE:-../.env.prod}
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./${CADDYFILE_NAME:-Caddyfile}:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      skillra-api:
+        condition: service_healthy
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  skillra-bot:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.bot
+    command: python -m telegram_bot.main
+    env_file:
+      - ${SKILLRA_COMPOSE_ENV_FILE:-../.env.prod}
+    environment:
+      SKILLRA_API_BASE_URL: http://prod-skillra-api:${SKILLRA_API_PORT:-8000}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    restart: unless-stopped
+    depends_on:
+      skillra-api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,urllib.request as u; port=os.getenv('TELEGRAM_WEBHOOK_PORT','8080'); u.urlopen(f'http://localhost:{port}/health', timeout=2).close()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      default:
+        aliases:
+          - prod-skillra-bot
+
+  migrator:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.api
+    command: ["bash", "-c", "cd /workspace/apps/skillra_api && alembic upgrade head"]
+    env_file:
+      - ${SKILLRA_COMPOSE_ENV_FILE:-../.env.prod}
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://skillra:skillra@postgres:5432/skillra}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    logging: *default-logging
+
+  pipeline_runner:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.api
+    command: ["bash", "infra/pipeline_runner.sh"]
+    env_file:
+      - ${SKILLRA_COMPOSE_ENV_FILE:-../.env.prod}
+    environment:
+      SKILLRA_API_BASE_URL: http://prod-skillra-api:${SKILLRA_API_PORT:-8000}
+      HH_SALARY_ONLY: ${HH_SALARY_ONLY:-0}
+      SKILLRA_REQUIRE_RAW_S3_COMMIT: ${SKILLRA_REQUIRE_RAW_S3_COMMIT:-1}
+    volumes:
+      - ${SKILLRA_DATA_VOLUME_BASE:-/var/lib/skillra}/processed:/workspace/data/processed
+      - ${SKILLRA_DATA_VOLUME_BASE:-/var/lib/skillra}/raw/hh:/workspace/data/raw/hh
+      - ${SKILLRA_DATA_VOLUME_BASE:-/var/lib/skillra}/metrics:/workspace/data/metrics
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    depends_on:
+      skillra-api:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    profiles:
+      - ops
+    logging: *default-logging
+
+  postgres:
+    image: postgres:15.8
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-skillra}
+      POSTGRES_USER: ${POSTGRES_USER:-skillra}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-skillra}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-skillra} -d ${POSTGRES_DB:-skillra}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  redis:
+    image: redis:7.2.5
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --auto-aof-rewrite-percentage
+      - "100"
+      - --auto-aof-rewrite-min-size
+      - 64mb
+      - --save
+      - "3600"
+      - "1"
+      - --save
+      - "300"
+      - "100"
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  minio:
+    image: minio/minio:RELEASE.2024-10-29T16-01-48Z
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
+    env_file:
+      - ${SKILLRA_COMPOSE_ENV_FILE:-../.env.prod}
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-skillra}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-changeme-minio-password}
+      MINIO_BROWSER_REDIRECT_URL: ${MINIO_BROWSER_REDIRECT_URL:-}
+    volumes:
+      - minio_data:/data
+    networks:
+      default:
+        aliases:
+          - prod-minio
+    logging: *default-logging
+
+  minio-init:
+    image: minio/mc:RELEASE.2024-10-29T15-34-59Z
+    env_file:
+      - ${SKILLRA_COMPOSE_ENV_FILE:-../.env.prod}
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-skillra}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-changeme-minio-password}
+      MINIO_BUCKET_RESUMES: ${MINIO_BUCKET_RESUMES:-skillra-resumes}
+      MINIO_BUCKET_REPORTS: ${MINIO_BUCKET_REPORTS:-skillra-reports}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-skillra-api}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-changeme-api-s3-password}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-skillra-pipeline}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-changeme-pipeline-s3-password}
+      S3_BACKUP_ACCESS_KEY_ID: ${S3_BACKUP_ACCESS_KEY_ID:-skillra-backup}
+      S3_BACKUP_SECRET_ACCESS_KEY: ${S3_BACKUP_SECRET_ACCESS_KEY:-changeme-backup-s3-password}
+      S3_BUCKET_RAW_HH: ${S3_BUCKET_RAW_HH:-skillra-raw-hh}
+      S3_BUCKET_PROCESSED: ${S3_BUCKET_PROCESSED:-skillra-processed}
+      S3_BUCKET_BACKUPS: ${S3_BUCKET_BACKUPS:-skillra-backups}
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - |-
+        set -eu
+
+        until mc alias set local http://prod-minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"; do
+          sleep 2
+        done
+
+        mc mb --ignore-existing "local/$${S3_BUCKET_RAW_HH}"
+        mc mb --ignore-existing "local/$${S3_BUCKET_PROCESSED}"
+        mc mb --ignore-existing "local/$${S3_BUCKET_BACKUPS}"
+        mc mb --ignore-existing "local/$${MINIO_BUCKET_RESUMES}"
+        mc mb --ignore-existing "local/$${MINIO_BUCKET_REPORTS}"
+        mc anonymous set none "local/$${S3_BUCKET_RAW_HH}"
+        mc anonymous set none "local/$${S3_BUCKET_PROCESSED}"
+        mc anonymous set none "local/$${S3_BUCKET_BACKUPS}"
+        mc anonymous set none "local/$${MINIO_BUCKET_RESUMES}"
+        mc anonymous set none "local/$${MINIO_BUCKET_REPORTS}"
+
+        ensure_user() {
+          user_name="$$1"
+          user_secret="$$2"
+          if mc admin user info local "$$user_name" >/dev/null 2>&1; then
+            echo "MinIO user $$user_name already exists"
+          else
+            mc admin user add local "$$user_name" "$$user_secret"
+          fi
+        }
+
+        ensure_policy() {
+          policy_name="$$1"
+          policy_file="$$2"
+          if mc admin policy info local "$$policy_name" >/dev/null 2>&1; then
+            echo "MinIO policy $$policy_name already exists"
+          else
+            mc admin policy create local "$$policy_name" "$$policy_file"
+          fi
+        }
+
+        cat > /tmp/skillra-api-policy.json <<EOF
+        {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:ListBucket","s3:GetBucketLocation","s3:ListBucketMultipartUploads"],"Resource":["arn:aws:s3:::$${MINIO_BUCKET_RESUMES}","arn:aws:s3:::$${MINIO_BUCKET_REPORTS}"]},{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject","s3:AbortMultipartUpload","s3:ListMultipartUploadParts"],"Resource":["arn:aws:s3:::$${MINIO_BUCKET_RESUMES}/*","arn:aws:s3:::$${MINIO_BUCKET_REPORTS}/*"]}]}
+        EOF
+        cat > /tmp/skillra-api-pii-versioned-delete-policy.json <<EOF
+        {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:ListBucketVersions"],"Resource":["arn:aws:s3:::$${MINIO_BUCKET_RESUMES}","arn:aws:s3:::$${MINIO_BUCKET_REPORTS}"]},{"Effect":"Allow","Action":["s3:DeleteObjectVersion"],"Resource":["arn:aws:s3:::$${MINIO_BUCKET_RESUMES}/*","arn:aws:s3:::$${MINIO_BUCKET_REPORTS}/*"]}]}
+        EOF
+        cat > /tmp/skillra-pipeline-policy.json <<EOF
+        {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:ListBucket","s3:GetBucketLocation","s3:ListBucketMultipartUploads"],"Resource":["arn:aws:s3:::$${S3_BUCKET_RAW_HH}","arn:aws:s3:::$${S3_BUCKET_PROCESSED}"]},{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject","s3:AbortMultipartUpload","s3:ListMultipartUploadParts"],"Resource":["arn:aws:s3:::$${S3_BUCKET_RAW_HH}/*","arn:aws:s3:::$${S3_BUCKET_PROCESSED}/*"]}]}
+        EOF
+        cat > /tmp/skillra-backup-policy.json <<EOF
+        {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:ListBucket","s3:GetBucketLocation","s3:ListBucketMultipartUploads"],"Resource":["arn:aws:s3:::$${S3_BUCKET_BACKUPS}"]},{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject","s3:AbortMultipartUpload","s3:ListMultipartUploadParts"],"Resource":["arn:aws:s3:::$${S3_BUCKET_BACKUPS}/*"]}]}
+        EOF
+
+        ensure_user "$${MINIO_ACCESS_KEY}" "$${MINIO_SECRET_KEY}"
+        ensure_user "$${S3_ACCESS_KEY_ID}" "$${S3_SECRET_ACCESS_KEY}"
+        ensure_user "$${S3_BACKUP_ACCESS_KEY_ID}" "$${S3_BACKUP_SECRET_ACCESS_KEY}"
+        ensure_policy skillra-api /tmp/skillra-api-policy.json
+        ensure_policy skillra-api-pii-versioned-delete /tmp/skillra-api-pii-versioned-delete-policy.json
+        ensure_policy skillra-pipeline /tmp/skillra-pipeline-policy.json
+        ensure_policy skillra-backup /tmp/skillra-backup-policy.json
+        mc admin policy attach local skillra-api --user "$${MINIO_ACCESS_KEY}"
+        mc admin policy attach local skillra-api-pii-versioned-delete --user "$${MINIO_ACCESS_KEY}"
+        mc admin policy attach local skillra-pipeline --user "$${S3_ACCESS_KEY_ID}"
+        mc admin policy attach local skillra-backup --user "$${S3_BACKUP_ACCESS_KEY_ID}"
+    depends_on:
+      minio:
+        condition: service_started
+    restart: "no"
+    logging: *default-logging
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    environment:
+      MEILISEARCH_API_KEY: ${MEILISEARCH_API_KEY:-masterKey}
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - |
+        set -eu
+        umask 077
+        printf '%s' "$${MEILISEARCH_API_KEY:-masterKey}" > /tmp/meilisearch_api_key
+        exec /bin/prometheus \
+          --config.file=/etc/prometheus/prometheus.yml \
+          --storage.tsdb.path=/prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - ./monitoring/prometheus_alerts.yml:/etc/prometheus/prometheus_alerts.yml:ro
+      - ./monitoring/alerts:/etc/prometheus/alerts:ro
+      - prometheus_data:/prometheus
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    networks:
+      default:
+        aliases:
+          - prod-prometheus
+    logging: *default-logging
+
+  loki:
+    image: grafana/loki:3.2.0
+    command:
+      - "-config.file=/etc/loki/config.yml"
+    volumes:
+      - ./monitoring/loki/config.yml:/etc/loki/config.yml:ro
+      - loki_data:/loki
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    logging: *default-logging
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    env_file:
+      - ${SKILLRA_COMPOSE_ENV_FILE:-../.env.prod}
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER:-skillra}
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:-skillra}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+    restart: unless-stopped
+    depends_on:
+      prometheus:
+        condition: service_started
+    profiles:
+      - monitoring
+    networks:
+      default:
+        aliases:
+          - prod-grafana
+    logging: *default-logging
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/rootfs"
+      - "--collector.textfile.directory=/var/lib/node_exporter/textfile_collector"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+      - ${SKILLRA_DATA_VOLUME_BASE:-/var/lib/skillra}/metrics:/var/lib/node_exporter/textfile_collector:ro
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    logging: *default-logging
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    logging: *default-logging
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    env_file:
+      - ${SKILLRA_COMPOSE_ENV_FILE:-../.env.prod}
+    environment:
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER:-skillra}:${POSTGRES_PASSWORD:-skillra}@postgres:5432/${POSTGRES_DB:-skillra}?sslmode=disable
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - monitoring
+    logging: *default-logging
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.63.0
+    env_file:
+      - ${SKILLRA_COMPOSE_ENV_FILE:-../.env.prod}
+    environment:
+      REDIS_ADDR: redis://redis:6379
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    profiles:
+      - monitoring
+    logging: *default-logging
+
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:v0.4.2
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      EVENTS: "1"
+      PING: "1"
+      VERSION: "1"
+      INFO: "1"
+      CONTAINERS: "1"
+      NETWORKS: "1"
+      POST: "0"
+    expose:
+      - "2375"
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp
+      - /run
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    logging: *default-logging
+
+  alloy:
+    image: grafana/alloy:v1.4.1
+    command:
+      - "run"
+      - "/etc/alloy/config.alloy"
+    volumes:
+      - ./monitoring/alloy/config.alloy:/etc/alloy/config.alloy:ro
+    restart: unless-stopped
+    depends_on:
+      docker-socket-proxy:
+        condition: service_started
+    profiles:
+      - monitoring
+    logging: *default-logging
+
+  # Sprint-006 TASK-11: Web SPA service
+  skillra-web:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.web.prod
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-https://skillra.ru}
+        VITE_TELEGRAM_BOT_USERNAME: ${VITE_TELEGRAM_BOT_USERNAME:-skillra_bot}
+        VITE_SKILLRA_RUNTIME_ENV: ${VITE_SKILLRA_RUNTIME_ENV:-prod}
+        VITE_ENABLE_EVIDENCE_EXPLAINER: ${VITE_ENABLE_EVIDENCE_EXPLAINER:-0}
+        VITE_EVIDENCE_EXPLAINER_ALLOWED_TELEGRAM_USER_IDS: ${VITE_EVIDENCE_EXPLAINER_ALLOWED_TELEGRAM_USER_IDS:-}
+    ports:
+      - "127.0.0.1:5173:80"
+    restart: unless-stopped
+    networks:
+      default:
+        aliases:
+          - prod-skillra-web
+    logging: *default-logging
+
+  # Sprint-007 TASK-11: Data pipeline cron scheduler
+  data-scheduler:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.api
+    command: ["bash", "infra/data_scheduler.sh"]
+    env_file:
+      - ${SKILLRA_COMPOSE_ENV_FILE:-../.env.prod}
+    environment:
+      SKILLRA_API_BASE_URL: http://prod-skillra-api:${SKILLRA_API_PORT:-8000}
+      SKILLRA_REFRESH_HH: ${DATA_SCHEDULER_REFRESH_HH:-1}
+      HH_SALARY_ONLY: ${HH_SALARY_ONLY:-0}
+      SKILLRA_S3_SYNC: ${SKILLRA_S3_SYNC:-1}
+      SKILLRA_REQUIRE_RAW_S3_COMMIT: ${SKILLRA_REQUIRE_RAW_S3_COMMIT:-1}
+      DATA_SCHEDULER_UTC_HOUR: ${DATA_SCHEDULER_UTC_HOUR:-2}
+      DATA_SCHEDULER_UTC_MINUTE: ${DATA_SCHEDULER_UTC_MINUTE:-0}
+      DATA_SCHEDULER_MAX_RETRIES: ${DATA_SCHEDULER_MAX_RETRIES:-3}
+      DATA_SCHEDULER_RETRY_DELAY_SECONDS: ${DATA_SCHEDULER_RETRY_DELAY_SECONDS:-60}
+    volumes:
+      - ${SKILLRA_DATA_VOLUME_BASE:-/var/lib/skillra}/processed:/workspace/data/processed
+      - ${SKILLRA_DATA_VOLUME_BASE:-/var/lib/skillra}/raw/hh:/workspace/data/raw/hh
+      - ${SKILLRA_DATA_VOLUME_BASE:-/var/lib/skillra}/metrics:/workspace/data/metrics
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    depends_on:
+      skillra-api:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    logging: *default-logging
+
+  # Sprint-007 TASK-12: AlertManager
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "9093:9093"
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    logging: *default-logging
+
+  # Sprint-008 TASK-01: DigestWorker (standalone)
+  # Sprint-009 TASK-03: profiles убраны — digest-worker всегда запускается в prod
+  digest-worker:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.digest-worker
+    environment:
+      SKILLRA_API_BASE_URL: http://prod-skillra-api:8000
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      SKILLRA_API_TOKEN: ${SKILLRA_API_TOKEN}
+      SKILLRA_ADMIN_TOKEN: ${SKILLRA_ADMIN_TOKEN}
+      DIGEST_POLL_INTERVAL: ${DIGEST_POLL_INTERVAL:-60}
+      DIGEST_WORKER_HEARTBEAT_PATH: ${DIGEST_WORKER_HEARTBEAT_PATH:-/tmp/digest_worker_heartbeat}
+      DIGEST_WORKER_HEARTBEAT_MAX_AGE_SECONDS: ${DIGEST_WORKER_HEARTBEAT_MAX_AGE_SECONDS:-300}
+      DIGEST_WORKER_HEARTBEAT_METRICS_PATH: /workspace/data/metrics/skillra_digest_worker.prom
+      DIGEST_WORKER_METRICS_PATH: /workspace/data/metrics/skillra_digest_worker_events.prom
+    volumes:
+      - ${SKILLRA_DATA_VOLUME_BASE:-/var/lib/skillra}/metrics:/workspace/data/metrics
+    depends_on:
+      skillra-api:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,pathlib,time,sys; path=os.getenv('DIGEST_WORKER_HEARTBEAT_PATH','/tmp/digest_worker_heartbeat'); max_age=float(os.getenv('DIGEST_WORKER_HEARTBEAT_MAX_AGE_SECONDS','300')); ts=float(open(path).read()); fresh=time.time()-ts < max_age; metric=os.getenv('DIGEST_WORKER_HEARTBEAT_METRICS_PATH'); metric and pathlib.Path(metric).parent.mkdir(parents=True, exist_ok=True); metric and pathlib.Path(metric).write_text(f'skillra_digest_worker_heartbeat_timestamp_seconds {ts}\\n', encoding='utf-8'); sys.exit(0 if fresh else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    tmpfs:
+      - /tmp
+
+  # Gap-v8 B-NEW-02: MeiliSearch search engine (prod)
+  # Sprint-009 TASK-02 added to dev.yml; this adds to prod.yml
+  meilisearch:
+    image: getmeili/meilisearch:v1.10
+    environment:
+      MEILI_MASTER_KEY: ${MEILISEARCH_API_KEY:-masterKey}
+      MEILI_NO_ANALYTICS: "true"
+      MEILI_EXPERIMENTAL_ENABLE_METRICS: "true"
+    volumes:
+      - meili_data:/meili_data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7700/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  pg_data:
+  redis_data:
+  caddy_data:
+  caddy_config:
+  prometheus_data:
+  grafana_data:
+  loki_data:
+  minio_data:
+  meili_data:

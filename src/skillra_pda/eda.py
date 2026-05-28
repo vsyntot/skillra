@@ -1,7 +1,8 @@
 """EDA helper functions."""
+
 from __future__ import annotations
 
-from typing import Iterable, List
+from typing import Iterable
 
 import pandas as pd
 
@@ -199,9 +200,7 @@ def english_requirement_stats(df: pd.DataFrame, salary_col: str = "salary_mid_ru
     )
     total = len(temp)
     grouped["share"] = grouped["vacancy_count"] / total if total else 0
-    grouped["english_level"] = pd.Categorical(
-        grouped["english_level"], categories=ENGLISH_LEVEL_ORDER, ordered=True
-    )
+    grouped["english_level"] = pd.Categorical(grouped["english_level"], categories=ENGLISH_LEVEL_ORDER, ordered=True)
     grouped = grouped.sort_values(by="english_level")
     return grouped.reset_index(drop=True)
 
@@ -395,9 +394,7 @@ def remote_share_by_role(df: pd.DataFrame) -> pd.DataFrame:
     return pivot.sort_values(by="remote_share", ascending=False)
 
 
-def benefits_summary_by_company(
-    df: pd.DataFrame, company_col: str = "company", top_n: int = 10
-) -> pd.DataFrame:
+def benefits_summary_by_company(df: pd.DataFrame, company_col: str = "company", top_n: int = 10) -> pd.DataFrame:
     """Average benefits per vacancy and per-benefit shares for top employers."""
 
     benefits = [col for col in df.columns if col.startswith("benefit_")]
@@ -438,10 +435,12 @@ def soft_skills_overall_stats(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     subset = df[soft_cols].fillna(False).astype(bool)
-    result = pd.DataFrame({
-        "count": subset.sum(),
-        "share": subset.mean(),
-    })
+    result = pd.DataFrame(
+        {
+            "count": subset.sum(),
+            "share": subset.mean(),
+        }
+    )
     result.index.name = "soft_skill"
     return result.reset_index()
 
@@ -519,15 +518,11 @@ def junior_friendly_share_by_segment(df: pd.DataFrame) -> pd.DataFrame:
     flags = ["is_for_juniors", "allows_students", "has_mentoring", "has_test_task"]
     missing_cols = [col for col in flags if col not in df.columns]
     if missing_cols:
-        raise KeyError(
-            f"Ожидал колонки {missing_cols} для junior_friendly_share_by_segment"
-        )
+        raise KeyError(f"Ожидал колонки {missing_cols} для junior_friendly_share_by_segment")
 
     group_cols = [col for col in ["primary_role", "grade"] if col in df.columns]
     melted = df[group_cols + flags].melt(id_vars=group_cols, value_vars=flags, var_name="flag", value_name="value")
-    result = (
-        melted.groupby(group_cols + ["flag"])["value"].mean().reset_index().rename(columns={"value": "share"})
-    )
+    result = melted.groupby(group_cols + ["flag"])["value"].mean().reset_index().rename(columns={"value": "share"})
     return result
 
 

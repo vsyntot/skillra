@@ -1,0 +1,13 @@
+pandas
+numpy
+matplotlib
+seaborn
+PyYAML>=6.0
+pyarrow
+boto3
+# Security minimum versions (CVE fixes validated by CI pip-audit)
+requests>=2.32.4
+# Fix CVE-2026-21441
+urllib3>=2.6.3
+fonttools>=4.60.2
+# beautifulsoup4 removed: not used in skillra_pda analytics core (confirmed by grep, 2026-05-17)

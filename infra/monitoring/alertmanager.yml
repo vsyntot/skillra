@@ -1,0 +1,23 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  group_by: ['alertname', 'job']
+  group_wait: 10s
+  group_interval: 5m
+  repeat_interval: 12h
+  receiver: 'telegram-admin'
+
+receivers:
+  - name: 'telegram-admin'
+    webhook_configs:
+      - url: 'http://skillra-bot:8080/alerts'
+        send_resolved: true
+        max_alerts: 10
+
+inhibit_rules:
+  - source_matchers:
+      - severity = 'critical'
+    target_matchers:
+      - severity = 'warning'
+    equal: ['alertname', 'job']

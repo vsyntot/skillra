@@ -1,0 +1,86 @@
+python:
+  - title: Python Tutorial
+    url: https://docs.python.org/3/tutorial/
+    type: docs
+  - title: Automate the Boring Stuff with Python
+    url: https://automatetheboringstuff.com/
+    type: book
+sql:
+  - title: SQLBolt
+    url: https://sqlbolt.com/
+    type: practice
+  - title: PostgreSQL Tutorial
+    url: https://www.postgresql.org/docs/current/tutorial.html
+    type: docs
+pandas:
+  - title: pandas User Guide
+    url: https://pandas.pydata.org/docs/user_guide/
+    type: docs
+numpy:
+  - title: NumPy Learn
+    url: https://numpy.org/learn/
+    type: docs
+matplotlib:
+  - title: Matplotlib Tutorials
+    url: https://matplotlib.org/stable/tutorials/
+    type: docs
+seaborn:
+  - title: seaborn Tutorial
+    url: https://seaborn.pydata.org/tutorial.html
+    type: docs
+scikit-learn:
+  - title: scikit-learn User Guide
+    url: https://scikit-learn.org/stable/user_guide.html
+    type: docs
+excel:
+  - title: Excel Training
+    url: https://support.microsoft.com/en-us/excel
+    type: course
+tableau:
+  - title: Tableau Learning
+    url: https://www.tableau.com/learn/training
+    type: course
+power bi:
+  - title: Microsoft Power BI Learning
+    url: https://learn.microsoft.com/en-us/training/powerplatform/power-bi
+    type: course
+airflow:
+  - title: Apache Airflow Documentation
+    url: https://airflow.apache.org/docs/
+    type: docs
+docker:
+  - title: Docker Get Started
+    url: https://docs.docker.com/get-started/
+    type: docs
+git:
+  - title: Pro Git
+    url: https://git-scm.com/book/en/v2
+    type: book
+linux:
+  - title: Linux Journey
+    url: https://linuxjourney.com/
+    type: course
+statistics:
+  - title: OpenIntro Statistics
+    url: https://www.openintro.org/book/os/
+    type: book
+machine learning:
+  - title: Machine Learning Crash Course
+    url: https://developers.google.com/machine-learning/crash-course
+    type: course
+data visualization:
+  - title: Fundamentals of Data Visualization
+    url: https://clauswilke.com/dataviz/
+    type: book
+etl:
+  - title: Data Engineering Zoomcamp
+    url: https://github.com/DataTalksClub/data-engineering-zoomcamp
+    type: course
+spark:
+  - title: Spark Documentation
+    url: https://spark.apache.org/docs/latest/
+    type: docs
+dbt:
+  - title: dbt Learn
+    url: https://learn.getdbt.com/
+    type: course

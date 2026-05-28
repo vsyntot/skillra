@@ -1,9 +1,25 @@
 # Environments
 .venv/
 venv/
-env/
+/env/
 .env
 .env.*
+!.env.example
+!.env.prod.example
+!.env.staging.example
+!.env.*.example
+
+# Frontend dependency/build artifacts
+node_modules/
+*.tsbuildinfo
+.vite/
+apps/skillra_web/dist/
+apps/skillra_web/test-results/
+apps/skillra_web/playwright-report/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
 # Python artifacts
 __pycache__/
@@ -35,11 +51,21 @@ dist/
 # Coverage and reports
 .coverage
 htmlcov/
-reports/figures/
-reports/tables/
+reports/
 notebooks/*.html
-reports/notebooks/*.html
 
 # Data outputs
 data/processed/
 data/interim/
+data/metrics/
+data/raw/hh/latest.csv
+data/raw/hh/snapshots/
+data/raw/hh/snapshots_parquet/
+data/raw/hh/deltas/
+data/raw/hh/state.json
+data/raw/hh/manifest.jsonl
+data/raw/hh/raw_quality_report.json
+
+# Handoff-excluded internal/stakeholder docs
+docs/source/
+docs/commercial_launch/

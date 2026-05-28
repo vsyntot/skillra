@@ -1,0 +1,121 @@
+(security_headers) {
+    header {
+        -Server
+        Strict-Transport-Security "max-age=31536000"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Content-Security-Policy "frame-ancestors 'none'"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=(), usb=()"
+        X-XSS-Protection "0"
+    }
+}
+
+staging.skillra.ru {
+    import security_headers
+    encode zstd gzip
+
+    header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://staging.skillra.ru; img-src 'self' data:"
+
+    rate_limit {
+        zone staging_api {
+            key {remote_ip}
+            events 300
+            window 1m
+        }
+    }
+
+    @docs {
+        path /docs* /redoc* /openapi.json
+    }
+    basicauth @docs {
+        {$CADDY_DOCS_BASIC_AUTH_USER} {$CADDY_DOCS_BASIC_AUTH_HASH}
+    }
+
+    @admin {
+        path /v1/admin*
+    }
+    basicauth @admin {
+        {$CADDY_ADMIN_BASIC_AUTH_USER} {$CADDY_ADMIN_BASIC_AUTH_HASH}
+    }
+
+    @internal {
+        path /internal/*
+    }
+
+    @api {
+        path /health /v1/* /docs* /redoc* /openapi.json
+    }
+
+    handle @internal {
+        respond 404
+    }
+
+    handle @api {
+        reverse_proxy skillra-api:8000 {
+            lb_policy round_robin
+            health_uri /v1/ready
+            health_interval 15s
+        }
+    }
+
+    handle {
+        reverse_proxy skillra-web:80
+    }
+}
+
+tg.staging.skillra.ru {
+    import security_headers
+    encode zstd gzip
+
+    rate_limit {
+        zone staging_telegram {
+            key {remote_ip}
+            events 1200
+            window 1m
+        }
+    }
+
+    @alerts {
+        path /alerts
+    }
+
+    handle @alerts {
+        respond 404
+    }
+
+    reverse_proxy skillra-bot:8080
+}
+
+grafana.staging.skillra.ru {
+    import security_headers
+    encode zstd gzip
+
+    basicauth {
+        {$CADDY_GRAFANA_BASIC_AUTH_USER} {$CADDY_GRAFANA_BASIC_AUTH_HASH}
+    }
+
+    reverse_proxy grafana:3000
+}
+
+prometheus.staging.skillra.ru {
+    import security_headers
+    encode zstd gzip
+
+    basicauth {
+        {$CADDY_PROMETHEUS_BASIC_AUTH_USER} {$CADDY_PROMETHEUS_BASIC_AUTH_HASH}
+    }
+
+    reverse_proxy prometheus:9090
+}
+
+minio.staging.skillra.ru {
+    import security_headers
+    encode zstd gzip
+
+    basicauth {
+        {$CADDY_MINIO_BASIC_AUTH_USER} {$CADDY_MINIO_BASIC_AUTH_HASH}
+    }
+
+    reverse_proxy minio:9001
+}

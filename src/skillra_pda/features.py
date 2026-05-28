@@ -1,13 +1,13 @@
 """Feature engineering utilities aligned with the project plan."""
+
 from __future__ import annotations
 
-from typing import Dict, Iterable, List
+from typing import Any, Dict, Iterable, List
 
 import numpy as np
 import pandas as pd
 
 from .cleaning import detect_column_groups
-
 
 CITY_MILLION_PLUS = {
     "novosibirsk",
@@ -40,6 +40,64 @@ CITY_MILLION_PLUS = {
     "krasnodar",
     "краснодар",
 }
+
+AREA_GEO_DEFAULTS: dict[int, tuple[str, str, str]] = {
+    1: ("Russia", "Moscow", "Moscow"),
+    2: ("Russia", "Saint Petersburg", "Saint Petersburg"),
+    5: ("Ukraine", "unknown", "unknown"),
+    40: ("Belarus", "unknown", "unknown"),
+    51: ("Georgia", "unknown", "unknown"),
+    111: ("Moldova", "unknown", "unknown"),
+    113: ("Russia", "unknown", "unknown"),
+    159: ("Kazakhstan", "unknown", "unknown"),
+    160: ("Armenia", "unknown", "unknown"),
+    194: ("Tajikistan", "unknown", "unknown"),
+    204: ("Azerbaijan", "unknown", "unknown"),
+    218: ("Turkmenistan", "unknown", "unknown"),
+    237: ("Uzbekistan", "unknown", "unknown"),
+    246: ("Kyrgyzstan", "unknown", "unknown"),
+}
+
+CITY_GEO_ALIASES: list[tuple[str, str, str, tuple[str, ...]]] = [
+    ("Russia", "Moscow", "Moscow", ("moscow", "москва", "моск")),
+    (
+        "Russia",
+        "Saint Petersburg",
+        "Saint Petersburg",
+        ("saint petersburg", "st petersburg", "spb", "санкт-петербург", "петербург", "спб"),
+    ),
+    ("Russia", "Tatarstan", "Kazan", ("kazan", "казань")),
+    ("Russia", "Novosibirsk Oblast", "Novosibirsk", ("novosibirsk", "новосибирск")),
+    ("Russia", "Sverdlovsk Oblast", "Yekaterinburg", ("yekaterinburg", "ekaterinburg", "екатеринбург")),
+    ("Russia", "Nizhny Novgorod Oblast", "Nizhny Novgorod", ("nizhny novgorod", "нижний новгород")),
+    ("Russia", "Chelyabinsk Oblast", "Chelyabinsk", ("chelyabinsk", "челябинск")),
+    ("Russia", "Samara Oblast", "Samara", ("samara", "самара")),
+    ("Russia", "Omsk Oblast", "Omsk", ("omsk", "омск")),
+    ("Russia", "Rostov Oblast", "Rostov-on-Don", ("rostov-on-don", "rostov-na-donu", "ростов-на-дону")),
+    ("Russia", "Bashkortostan", "Ufa", ("ufa", "уфа")),
+    ("Russia", "Krasnoyarsk Krai", "Krasnoyarsk", ("krasnoyarsk", "красноярск")),
+    ("Russia", "Perm Krai", "Perm", ("perm", "пермь")),
+    ("Russia", "Voronezh Oblast", "Voronezh", ("voronezh", "воронеж")),
+    ("Russia", "Volgograd Oblast", "Volgograd", ("volgograd", "волгоград")),
+    ("Russia", "Krasnodar Krai", "Krasnodar", ("krasnodar", "краснодар")),
+    ("Kazakhstan", "Almaty", "Almaty", ("almaty", "алматы")),
+    ("Kazakhstan", "Astana", "Astana", ("astana", "nursultan", "nur-sultan", "нур-султан", "астана")),
+    ("Belarus", "Minsk", "Minsk", ("minsk", "минск")),
+    ("Armenia", "Yerevan", "Yerevan", ("yerevan", "ереван")),
+    ("Georgia", "Tbilisi", "Tbilisi", ("tbilisi", "тбилиси")),
+    ("Uzbekistan", "Tashkent", "Tashkent", ("tashkent", "ташкент")),
+]
+
+COUNTRY_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
+    ("Kazakhstan", ("kazakhstan", "kazakh", "казахстан", "кз", "kz")),
+    ("Belarus", ("belarus", "беларус", "белорус", "минск")),
+    ("Armenia", ("armenia", "армения", "ереван")),
+    ("Georgia", ("georgia", "грузия", "тбилиси")),
+    ("Uzbekistan", ("uzbekistan", "узбекистан", "ташкент")),
+    ("Kyrgyzstan", ("kyrgyzstan", "киргиз", "кыргыз")),
+    ("Azerbaijan", ("azerbaijan", "азербайджан", "баку")),
+    ("Russia", ("russia", "россия", "москва", "петербург")),
+]
 
 PRIMARY_ROLE_PRIORITY = [
     "role_ml",
@@ -240,6 +298,93 @@ def add_city_tier(df: pd.DataFrame, city_col: str = "city") -> pd.DataFrame:
     return df
 
 
+def _normalize_text(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        return ""
+    return str(value).strip()
+
+
+def _area_id(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _fallback_city_name(value: str) -> str:
+    normalized = " ".join(value.replace("\xa0", " ").split())
+    return normalized[:100] if normalized else "unknown"
+
+
+def _geo_from_city(city: Any, area_id: Any = None) -> tuple[str, str, str]:
+    """Return normalized country, region and city for market segmentation."""
+
+    resolved_area = _area_id(area_id)
+    country, region, normalized_city = AREA_GEO_DEFAULTS.get(resolved_area, ("unknown", "unknown", "unknown"))
+    raw_city = _normalize_text(city)
+    city_lower = raw_city.lower()
+
+    if city_lower:
+        for alias_country, alias_region, alias_city, aliases in CITY_GEO_ALIASES:
+            if any(alias in city_lower for alias in aliases):
+                return alias_country, alias_region, alias_city
+
+        for keyword_country, keywords in COUNTRY_KEYWORDS:
+            if any(keyword in city_lower for keyword in keywords):
+                country = keyword_country
+                break
+
+        if normalized_city == "unknown":
+            normalized_city = _fallback_city_name(raw_city)
+
+    return country, region, normalized_city
+
+
+def _geo_scope_from_work_mode(work_mode: Any, is_remote: Any = None, is_hybrid: Any = None) -> str:
+    mode = _normalize_text(work_mode).lower()
+    if mode == "remote" or (isinstance(is_remote, (bool, np.bool_)) and bool(is_remote)):
+        return "remote"
+    if mode == "hybrid" or (isinstance(is_hybrid, (bool, np.bool_)) and bool(is_hybrid)):
+        return "mixed"
+    if mode in {"office", "field"}:
+        return "local"
+    return "unknown"
+
+
+def add_geography_features(df: pd.DataFrame, city_col: str = "city") -> pd.DataFrame:
+    """Normalize geography beyond city tier for local/remote market advice."""
+
+    df = df.copy()
+    cities = df[city_col] if city_col in df.columns else pd.Series(pd.NA, index=df.index)
+    area_ids = df["search_area_id"] if "search_area_id" in df.columns else pd.Series(pd.NA, index=df.index)
+    geo_rows = [_geo_from_city(city, area_id) for city, area_id in zip(cities, area_ids)]
+    df["country"] = [row[0] for row in geo_rows]
+    df["region"] = [row[1] for row in geo_rows]
+    df["city_normalized"] = [row[2] for row in geo_rows]
+    df["geo_scope"] = [
+        _geo_scope_from_work_mode(
+            df.get("work_mode").iloc[i] if "work_mode" in df else None,
+            df.get("is_remote").iloc[i] if "is_remote" in df else None,
+            df.get("is_hybrid").iloc[i] if "is_hybrid" in df else None,
+        )
+        for i in range(len(df))
+    ]
+    df["remote_geo_eligible"] = df["geo_scope"].isin({"remote", "mixed"}).astype("boolean")
+    return df
+
+
 def add_work_mode(df: pd.DataFrame) -> pd.DataFrame:
     """Create normalized work mode prioritizing explicit work_format, then remote/hybrid flags."""
 
@@ -313,13 +458,7 @@ def add_stack_aggregates(df: pd.DataFrame) -> pd.DataFrame:
     def _count_true(columns: List[str]) -> pd.Series:
         if not columns:
             return pd.Series(0, index=df.index)
-        return (
-            df[columns]
-            .fillna(False)
-            .astype(bool)
-            .astype(int)
-            .sum(axis=1)
-        )
+        return df[columns].fillna(False).astype(bool).astype(int).sum(axis=1)
 
     existing_core = [col for col in CORE_DATA_SKILLS if col in df.columns]
     existing_ml = [col for col in ML_STACK_SKILLS if col in df.columns]
@@ -342,7 +481,7 @@ def add_primary_role(df: pd.DataFrame, role_prefix: str = "role_") -> pd.DataFra
 
     Priority:
     1. Explicit role_* flags (in PRIMARY_ROLE_PRIORITY order)
-    2. Fallback keyword matching over vacancy title (name)
+    2. Fallback keyword matching over vacancy title (``title`` or legacy ``name``)
     3. ``other``
     """
 
@@ -366,7 +505,7 @@ def add_primary_role(df: pd.DataFrame, role_prefix: str = "role_") -> pd.DataFra
                 break
 
         if chosen is None:
-            chosen = _match_role_from_title(row.get("name"))
+            chosen = _match_role_from_title(row.get("title") or row.get("name"))
 
         primary_role.append(chosen or "other")
 
@@ -450,6 +589,11 @@ def ensure_expected_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
 
     expected_defaults = {
         "published_weekday": pd.NA,
+        "country": "unknown",
+        "region": "unknown",
+        "city_normalized": "unknown",
+        "geo_scope": "unknown",
+        "remote_geo_eligible": pd.NA,
         "city_tier": "unknown",
         "work_mode": "unknown",
         "grade_from_experience": "unknown",
@@ -478,6 +622,7 @@ def assemble_features(df: pd.DataFrame) -> pd.DataFrame:
     df = add_time_features(df)
     df = add_city_tier(df)
     df = add_work_mode(df)
+    df = add_geography_features(df)
     df = add_boolean_counts(df, groups=grouped)
     df = add_stack_aggregates(df)
     df = add_experience_flags(df)

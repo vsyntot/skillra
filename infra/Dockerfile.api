@@ -1,0 +1,41 @@
+FROM python:3.11.10-slim
+
+WORKDIR /workspace
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV MPLBACKEND=Agg
+ENV MPLCONFIGDIR=/tmp/matplotlib
+ENV XDG_CACHE_HOME=/tmp/.cache
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PIP_ROOT_USER_ACTION=ignore
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN groupadd -g 10001 skillra && \
+    useradd -m -u 10001 -g 10001 -s /bin/bash skillra
+
+RUN apt-get update -qq >/dev/null && \
+    apt-get install -y -qq --no-install-recommends \
+    build-essential \
+    ca-certificates \
+    curl \
+    postgresql-client \
+    util-linux >/dev/null 2>&1 && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY requirements requirements
+RUN pip install --disable-pip-version-check --root-user-action=ignore --no-cache-dir -r requirements/lock/base.lock.txt && \
+    pip install --disable-pip-version-check --root-user-action=ignore --no-cache-dir -r requirements/lock/skillra_api_prod.lock.txt && \
+    pip check
+
+COPY . .
+
+RUN pip install --disable-pip-version-check --root-user-action=ignore --no-cache-dir -e . && \
+    pip install --disable-pip-version-check --root-user-action=ignore --no-cache-dir -e apps/skillra_api
+
+RUN mkdir -p /workspace/data && \
+    chown -R 10001:10001 /workspace/data
+
+USER skillra
+
+EXPOSE 8000
+CMD ["uvicorn", "skillra_api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

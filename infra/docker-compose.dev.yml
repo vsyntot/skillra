@@ -1,0 +1,336 @@
+services:
+  skillra-api:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.api
+    command: uvicorn skillra_api.main:app --host 0.0.0.0 --port ${SKILLRA_API_PORT:-8000}
+    env_file:
+      - ../.env
+    environment:
+      SKILLRA_API_HOST: 0.0.0.0
+      SKILLRA_API_PORT: ${SKILLRA_API_PORT:-8000}
+      SKILLRA_DATA_DIR: /workspace/data/processed/latest
+      DATABASE_URL: postgresql+asyncpg://skillra:skillra@postgres:5432/skillra
+      REDIS_URL: redis://redis:6379/0
+      MEILISEARCH_URL: http://meilisearch:7700
+      MEILISEARCH_API_KEY: ${MEILISEARCH_API_KEY:-masterKey}
+      MINIO_ENDPOINT_URL: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-skillra-api}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-changeme-api-s3-password}
+      MINIO_BUCKET_RESUMES: ${MINIO_BUCKET_RESUMES:-skillra-resumes}
+      MINIO_BUCKET_REPORTS: ${MINIO_BUCKET_REPORTS:-skillra-reports}
+    volumes:
+      - ../data/processed:/workspace/data/processed
+    ports:
+      - "${SKILLRA_API_PORT:-8000}:${SKILLRA_API_PORT:-8000}"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+      meilisearch:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${SKILLRA_API_PORT:-8000}/health', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  skillra-bot:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.bot
+    command: python -m telegram_bot.main
+    env_file:
+      - ../.env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      SKILLRA_API_BASE_URL: http://skillra-api:8000
+    depends_on:
+      skillra-api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,urllib.request as u; port=os.getenv('TELEGRAM_WEBHOOK_PORT','8080'); u.urlopen(f'http://localhost:{port}/health', timeout=2).close()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  digest-worker:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.digest-worker
+    profiles: ["digest"]
+    env_file:
+      - ../.env
+    environment:
+      SKILLRA_API_BASE_URL: http://skillra-api:8000
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      SKILLRA_API_TOKEN: ${SKILLRA_API_TOKEN}
+      SKILLRA_ADMIN_TOKEN: ${SKILLRA_ADMIN_TOKEN}
+      DIGEST_POLL_INTERVAL: ${DIGEST_POLL_INTERVAL:-60}
+      DIGEST_WORKER_HEARTBEAT_PATH: ${DIGEST_WORKER_HEARTBEAT_PATH:-/tmp/digest_worker_heartbeat}
+      DIGEST_WORKER_HEARTBEAT_MAX_AGE_SECONDS: ${DIGEST_WORKER_HEARTBEAT_MAX_AGE_SECONDS:-300}
+      DIGEST_WORKER_METRICS_PATH: /workspace/data/metrics/skillra_digest_worker_events.prom
+    volumes:
+      - ../data/metrics:/workspace/data/metrics
+    depends_on:
+      skillra-api:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,pathlib,time,sys; path=os.getenv('DIGEST_WORKER_HEARTBEAT_PATH','/tmp/digest_worker_heartbeat'); max_age=float(os.getenv('DIGEST_WORKER_HEARTBEAT_MAX_AGE_SECONDS','300')); ts=float(open(path).read()); fresh=time.time()-ts < max_age; metric=os.getenv('DIGEST_WORKER_HEARTBEAT_METRICS_PATH'); metric and pathlib.Path(metric).parent.mkdir(parents=True, exist_ok=True); metric and pathlib.Path(metric).write_text(f'skillra_digest_worker_heartbeat_timestamp_seconds {ts}\\n', encoding='utf-8'); sys.exit(0 if fresh else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  migrator:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.api
+    command: ["bash", "-c", "cd /workspace/apps/skillra_api && alembic upgrade head"]
+    env_file:
+      - ../.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://skillra:skillra@postgres:5432/skillra
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  pipeline_runner:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.api
+    profiles: ["ops"]
+    command: ["bash", "infra/pipeline_runner.sh"]
+    env_file:
+      - ../.env
+    environment:
+      SKILLRA_API_BASE_URL: "http://skillra-api:8000"
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-skillra-pipeline}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-changeme-pipeline-s3-password}
+      S3_BACKUP_ACCESS_KEY_ID: ${S3_BACKUP_ACCESS_KEY_ID:-skillra-backup}
+      S3_BACKUP_SECRET_ACCESS_KEY: ${S3_BACKUP_SECRET_ACCESS_KEY:-changeme-backup-s3-password}
+      S3_BUCKET_RAW_HH: ${S3_BUCKET_RAW_HH:-skillra-raw-hh}
+      S3_BUCKET_PROCESSED: ${S3_BUCKET_PROCESSED:-skillra-processed}
+      S3_BUCKET_BACKUPS: ${S3_BUCKET_BACKUPS:-skillra-backups}
+      HH_SALARY_ONLY: ${HH_SALARY_ONLY:-0}
+      SKILLRA_REQUIRE_RAW_S3_COMMIT: ${SKILLRA_REQUIRE_RAW_S3_COMMIT:-0}
+    volumes:
+      - ../data/processed:/workspace/data/processed
+      - ../data/raw/hh:/workspace/data/raw/hh
+      - ../data/metrics:/workspace/data/metrics
+    depends_on:
+      skillra-api:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+
+  postgres:
+    image: postgres:15.8
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-skillra}
+      POSTGRES_USER: ${POSTGRES_USER:-skillra}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-skillra}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-skillra} -d ${POSTGRES_DB:-skillra}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  redis:
+    image: redis:7.2.5
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --auto-aof-rewrite-percentage
+      - "100"
+      - --auto-aof-rewrite-min-size
+      - 64mb
+      - --save
+      - "3600"
+      - "1"
+      - --save
+      - "300"
+      - "100"
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  skillra-web:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.web
+    command: npm run dev -- --host 0.0.0.0
+    ports:
+      - "${SKILLRA_WEB_PORT:-5173}:5173"
+    volumes:
+      - ../apps/skillra_web:/app
+      - /app/node_modules
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+      VITE_SKILLRA_API_TOKEN: ${SKILLRA_API_TOKEN:-}
+    depends_on:
+      skillra-api:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5173').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Sprint-009 TASK-02: MeiliSearch search engine
+  meilisearch:
+    image: getmeili/meilisearch:v1.10
+    environment:
+      MEILI_MASTER_KEY: ${MEILISEARCH_API_KEY:-masterKey}
+      MEILI_NO_ANALYTICS: "true"
+    ports:
+      - "${MEILISEARCH_PORT:-7700}:7700"
+    volumes:
+      - meili_data:/meili_data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7700/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  minio:
+    image: minio/minio:RELEASE.2024-10-29T16-01-48Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-skillra}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-changeme-minio-password}
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:RELEASE.2024-10-29T15-34-59Z
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-skillra}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-changeme-minio-password}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-skillra-api}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-changeme-api-s3-password}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-skillra-pipeline}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-changeme-pipeline-s3-password}
+      S3_BACKUP_ACCESS_KEY_ID: ${S3_BACKUP_ACCESS_KEY_ID:-skillra-backup}
+      S3_BACKUP_SECRET_ACCESS_KEY: ${S3_BACKUP_SECRET_ACCESS_KEY:-changeme-backup-s3-password}
+      MINIO_BUCKET_RESUMES: ${MINIO_BUCKET_RESUMES:-skillra-resumes}
+      MINIO_BUCKET_REPORTS: ${MINIO_BUCKET_REPORTS:-skillra-reports}
+      S3_BUCKET_RAW_HH: ${S3_BUCKET_RAW_HH:-skillra-raw-hh}
+      S3_BUCKET_PROCESSED: ${S3_BUCKET_PROCESSED:-skillra-processed}
+      S3_BUCKET_BACKUPS: ${S3_BUCKET_BACKUPS:-skillra-backups}
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - |-
+        set -eu
+
+        until mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"; do
+          sleep 2
+        done
+
+        mc mb --ignore-existing "local/$${S3_BUCKET_RAW_HH}"
+        mc mb --ignore-existing "local/$${S3_BUCKET_PROCESSED}"
+        mc mb --ignore-existing "local/$${S3_BUCKET_BACKUPS}"
+        mc mb --ignore-existing "local/$${MINIO_BUCKET_RESUMES}"
+        mc mb --ignore-existing "local/$${MINIO_BUCKET_REPORTS}"
+        mc anonymous set none "local/$${S3_BUCKET_RAW_HH}"
+        mc anonymous set none "local/$${S3_BUCKET_PROCESSED}"
+        mc anonymous set none "local/$${S3_BUCKET_BACKUPS}"
+        mc anonymous set none "local/$${MINIO_BUCKET_RESUMES}"
+        mc anonymous set none "local/$${MINIO_BUCKET_REPORTS}"
+
+        ensure_user() {
+          user_name="$$1"
+          user_secret="$$2"
+          if mc admin user info local "$$user_name" >/dev/null 2>&1; then
+            echo "MinIO user $$user_name already exists"
+          else
+            mc admin user add local "$$user_name" "$$user_secret"
+          fi
+        }
+
+        ensure_policy() {
+          policy_name="$$1"
+          policy_file="$$2"
+          if mc admin policy info local "$$policy_name" >/dev/null 2>&1; then
+            echo "MinIO policy $$policy_name already exists"
+          else
+            mc admin policy create local "$$policy_name" "$$policy_file"
+          fi
+        }
+
+        cat > /tmp/skillra-api-policy.json <<EOF
+        {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:ListBucket","s3:GetBucketLocation","s3:ListBucketMultipartUploads"],"Resource":["arn:aws:s3:::$${MINIO_BUCKET_RESUMES}","arn:aws:s3:::$${MINIO_BUCKET_REPORTS}"]},{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject","s3:AbortMultipartUpload","s3:ListMultipartUploadParts"],"Resource":["arn:aws:s3:::$${MINIO_BUCKET_RESUMES}/*","arn:aws:s3:::$${MINIO_BUCKET_REPORTS}/*"]}]}
+        EOF
+        cat > /tmp/skillra-api-pii-versioned-delete-policy.json <<EOF
+        {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:ListBucketVersions"],"Resource":["arn:aws:s3:::$${MINIO_BUCKET_RESUMES}","arn:aws:s3:::$${MINIO_BUCKET_REPORTS}"]},{"Effect":"Allow","Action":["s3:DeleteObjectVersion"],"Resource":["arn:aws:s3:::$${MINIO_BUCKET_RESUMES}/*","arn:aws:s3:::$${MINIO_BUCKET_REPORTS}/*"]}]}
+        EOF
+        cat > /tmp/skillra-pipeline-policy.json <<EOF
+        {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:ListBucket","s3:GetBucketLocation","s3:ListBucketMultipartUploads"],"Resource":["arn:aws:s3:::$${S3_BUCKET_RAW_HH}","arn:aws:s3:::$${S3_BUCKET_PROCESSED}"]},{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject","s3:AbortMultipartUpload","s3:ListMultipartUploadParts"],"Resource":["arn:aws:s3:::$${S3_BUCKET_RAW_HH}/*","arn:aws:s3:::$${S3_BUCKET_PROCESSED}/*"]}]}
+        EOF
+        cat > /tmp/skillra-backup-policy.json <<EOF
+        {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:ListBucket","s3:GetBucketLocation","s3:ListBucketMultipartUploads"],"Resource":["arn:aws:s3:::$${S3_BUCKET_BACKUPS}"]},{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject","s3:AbortMultipartUpload","s3:ListMultipartUploadParts"],"Resource":["arn:aws:s3:::$${S3_BUCKET_BACKUPS}/*"]}]}
+        EOF
+
+        ensure_user "$${MINIO_ACCESS_KEY}" "$${MINIO_SECRET_KEY}"
+        ensure_user "$${S3_ACCESS_KEY_ID}" "$${S3_SECRET_ACCESS_KEY}"
+        ensure_user "$${S3_BACKUP_ACCESS_KEY_ID}" "$${S3_BACKUP_SECRET_ACCESS_KEY}"
+        ensure_policy skillra-api /tmp/skillra-api-policy.json
+        ensure_policy skillra-api-pii-versioned-delete /tmp/skillra-api-pii-versioned-delete-policy.json
+        ensure_policy skillra-pipeline /tmp/skillra-pipeline-policy.json
+        ensure_policy skillra-backup /tmp/skillra-backup-policy.json
+        mc admin policy attach local skillra-api --user "$${MINIO_ACCESS_KEY}"
+        mc admin policy attach local skillra-api-pii-versioned-delete --user "$${MINIO_ACCESS_KEY}"
+        mc admin policy attach local skillra-pipeline --user "$${S3_ACCESS_KEY_ID}"
+        mc admin policy attach local skillra-backup --user "$${S3_BACKUP_ACCESS_KEY_ID}"
+    depends_on:
+      minio:
+        condition: service_started
+    restart: "no"
+
+volumes:
+  pg_data:
+  redis_data:
+  meili_data:
+  minio_data:

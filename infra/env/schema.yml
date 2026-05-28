@@ -1,0 +1,589 @@
+profiles:
+  local:
+    title: Skillra local environment
+    description: Local development defaults. Copy to .env and replace tokens before running services.
+  prod:
+    title: Skillra production environment
+    description: Production template for skillra.ru. Copy to .env.prod and replace every secret.
+  staging:
+    title: Skillra staging environment
+    description: Isolated staging template. Copy to .env.staging and replace every secret.
+
+groups:
+  - name: Runtime
+    variables:
+      SKILLRA_RUNTIME_ENV:
+        type: string
+        allowed: [local, staging, prod]
+        default:
+          local: local
+          prod: prod
+          staging: staging
+      SKILLRA_PUBLIC_BASE_URL:
+        type: url
+        required: [prod, staging]
+        default:
+          local: "http://localhost:8000"
+          prod: "https://skillra.ru"
+          staging: "https://staging.skillra.ru"
+      SKILLRA_API_HOST:
+        type: string
+        default: "0.0.0.0"
+      SKILLRA_API_PORT:
+        type: int
+        default: "8000"
+      SKILLRA_WEB_PORT:
+        type: int
+        default:
+          local: "5173"
+      LOG_LEVEL:
+        type: string
+        default: INFO
+      LOG_FORMAT:
+        type: string
+        allowed: [json, kv]
+        default: kv
+      SENTRY_DSN:
+        type: url
+        default: ""
+      CADDYFILE_NAME:
+        type: string
+        default:
+          prod: Caddyfile
+          staging: Caddyfile.staging
+
+  - name: API authentication
+    variables:
+      SKILLRA_API_TOKEN:
+        type: string
+        secret: true
+        required: [local, prod, staging]
+        placeholder: changeme-service-token
+      SKILLRA_ADMIN_TOKEN:
+        type: string
+        secret: true
+        required: [local, prod, staging]
+        placeholder: changeme-admin-token
+      SKILLRA_CORS_ORIGINS:
+        type: string
+        default:
+          local: "http://localhost:5173,http://127.0.0.1:5173"
+          prod: "https://skillra.ru,https://app.skillra.ru"
+          staging: "https://staging.skillra.ru"
+
+  - name: Data paths
+    variables:
+      SKILLRA_DATA_VOLUME_BASE:
+        type: string
+        default:
+          local: data
+          prod: /var/lib/skillra
+          staging: /var/lib/skillra-staging
+      SKILLRA_DATA_DIR:
+        type: string
+        default: data/processed/latest
+      SKILLRA_FEATURES_PATH:
+        type: string
+        default: data/processed/latest/hh_features.parquet
+      SKILLRA_MARKET_VIEW_PATH:
+        type: string
+        default: data/processed/latest/market_view.parquet
+      SKILLRA_DATASET_META_PATH:
+        type: string
+        default: data/processed/latest/dataset_meta.json
+      SKILLRA_MARKET_SNAPSHOTS_PATH:
+        type: string
+        default: data/processed/market_snapshots
+      SKILLRA_DATA_WATCH_INTERVAL:
+        type: float
+        default: "30.0"
+      SKILLRA_MIN_MARKET_N:
+        type: int
+        default: "80"
+
+  - name: Database and cache
+    variables:
+      DATABASE_URL:
+        type: postgres_url
+        default:
+          local: "postgresql+asyncpg://skillra:skillra@localhost:5432/skillra"
+          prod: "postgresql+asyncpg://skillra:changeme-postgres-password@postgres:5432/skillra"
+          staging: "postgresql+asyncpg://skillra:changeme-postgres-password@staging-postgres:5432/skillra_staging"
+      POSTGRES_DB:
+        type: string
+        default:
+          local: skillra
+          prod: skillra
+          staging: skillra_staging
+      POSTGRES_USER:
+        type: string
+        default: skillra
+      POSTGRES_PASSWORD:
+        type: string
+        secret: true
+        required: [local, prod, staging]
+        placeholder: changeme-postgres-password
+      POSTGRES_HOST:
+        type: string
+        default:
+          local: localhost
+      POSTGRES_PORT:
+        type: int
+        default:
+          local: "5432"
+      REDIS_URL:
+        type: redis_url
+        default:
+          local: "redis://localhost:6379/0"
+          prod: "redis://redis:6379/0"
+          staging: "redis://staging-redis:6379/0"
+      REDIS_PORT:
+        type: int
+        default:
+          local: "6379"
+
+  - name: Search
+    variables:
+      MEILISEARCH_URL:
+        type: url
+        default:
+          local: "http://localhost:7700"
+          prod: "http://meilisearch:7700"
+          staging: "http://staging-meilisearch:7700"
+      MEILISEARCH_API_KEY:
+        type: string
+        secret: true
+        required: [local, prod, staging]
+        placeholder: changeme-meili-master-key
+      MEILISEARCH_PORT:
+        type: int
+        default:
+          local: "7700"
+      SKILLRA_MEILI_TASK_TIMEOUT_MS:
+        type: int
+        default: "120000"
+      SKILLRA_MEILI_TASK_INTERVAL_MS:
+        type: int
+        default: "500"
+      SKILLRA_DIRECT_INDEX_BATCH_SIZE:
+        type: int
+        default: "500"
+
+  - name: Object storage
+    variables:
+      MINIO_ENDPOINT_URL:
+        type: url
+        default:
+          local: "http://localhost:9000"
+          prod: "http://prod-minio:9000"
+          staging: "http://staging-minio-internal:9000"
+      MINIO_ROOT_USER:
+        type: string
+        default: skillra
+      MINIO_ROOT_PASSWORD:
+        type: string
+        secret: true
+        required: [local, prod, staging]
+        placeholder: changeme-minio-root-password
+      MINIO_ACCESS_KEY:
+        type: string
+        default: skillra-api
+      MINIO_SECRET_KEY:
+        type: string
+        secret: true
+        required: [local, prod, staging]
+        placeholder: changeme-api-s3-password
+      MINIO_BUCKET_RESUMES:
+        type: string
+        default:
+          local: skillra-resumes
+          prod: skillra-resumes
+          staging: skillra-staging-resumes
+      MINIO_BUCKET_REPORTS:
+        type: string
+        default:
+          local: skillra-reports
+          prod: skillra-reports
+          staging: skillra-staging-reports
+      MINIO_BROWSER_REDIRECT_URL:
+        type: url
+        default:
+          prod: ""
+          staging: ""
+      MINIO_PORT:
+        type: int
+        default:
+          local: "9000"
+      MINIO_CONSOLE_PORT:
+        type: int
+        default:
+          local: "9001"
+      S3_ENDPOINT_URL:
+        type: url
+        default:
+          local: "http://localhost:9000"
+          prod: "http://prod-minio:9000"
+          staging: "http://staging-minio-internal:9000"
+      S3_REGION:
+        type: string
+        default: us-east-1
+      S3_ACCESS_KEY_ID:
+        type: string
+        default: skillra-pipeline
+      S3_SECRET_ACCESS_KEY:
+        type: string
+        secret: true
+        required: [local, prod, staging]
+        placeholder: changeme-pipeline-s3-password
+      S3_BACKUP_ACCESS_KEY_ID:
+        type: string
+        default: skillra-backup
+      S3_BACKUP_SECRET_ACCESS_KEY:
+        type: string
+        secret: true
+        required: [local, prod, staging]
+        placeholder: changeme-backup-s3-password
+      S3_BUCKET_RAW_HH:
+        type: string
+        default:
+          local: skillra-raw-hh
+          prod: skillra-raw-hh
+          staging: skillra-staging-raw-hh
+      S3_BUCKET_PROCESSED:
+        type: string
+        default:
+          local: skillra-processed
+          prod: skillra-processed
+          staging: skillra-staging-processed
+      S3_BUCKET_BACKUPS:
+        type: string
+        default:
+          local: skillra-backups
+          prod: skillra-backups
+          staging: skillra-staging-backups
+      SKILLRA_STORAGE_S3_TIMEOUT_SECONDS:
+        type: float
+        default: "10.0"
+      SKILLRA_STORAGE_S3_MAX_ATTEMPTS:
+        type: int
+        default: "2"
+      SKILLRA_STORAGE_S3_MAX_CONCURRENCY:
+        type: int
+        default: "8"
+      SKILLRA_MAX_RESUME_BYTES:
+        type: int
+        default: "10485760"
+
+  - name: Web
+    variables:
+      VITE_API_BASE_URL:
+        type: url
+        default:
+          local: "http://localhost:8000"
+          prod: "https://skillra.ru"
+          staging: "https://staging.skillra.ru"
+      VITE_SKILLRA_API_TOKEN:
+        type: string
+        default:
+          local: changeme-service-token
+      VITE_TELEGRAM_BOT_USERNAME:
+        type: string
+        default:
+          local: skillra_local_bot
+          prod: skillra_bot
+          staging: skillra_staging_bot
+      VITE_SKILLRA_RUNTIME_ENV:
+        type: string
+        allowed: [local, staging, prod]
+        default:
+          local: local
+          prod: prod
+          staging: staging
+      VITE_ENABLE_EVIDENCE_EXPLAINER:
+        type: bool
+        default: "0"
+      VITE_EVIDENCE_EXPLAINER_ALLOWED_TELEGRAM_USER_IDS:
+        type: string
+        default: ""
+
+  - name: Telegram bot
+    variables:
+      TELEGRAM_BOT_TOKEN:
+        type: string
+        secret: true
+        required: [local, prod, staging]
+        placeholder: changeme-telegram-bot-token
+      TELEGRAM_BOT_USERNAME:
+        type: string
+        default:
+          local: skillra_local_bot
+          prod: skillra_bot
+          staging: skillra_staging_bot
+      TELEGRAM_PROD_BOT_USERNAME:
+        type: string
+        default: skillra_bot
+      TELEGRAM_ADMIN_IDS:
+        type: string
+        default: ""
+      BOT_MODE:
+        type: string
+        allowed: [polling, webhook]
+        default:
+          local: polling
+          prod: polling
+          staging: polling
+      TELEGRAM_PARSE_MODE:
+        type: string
+        default: HTML
+      TELEGRAM_RATE_LIMIT_PER_SECOND:
+        type: float
+        default: "1.0"
+      TELEGRAM_DIGEST_POLL_INTERVAL_SECONDS:
+        type: float
+        default: "60.0"
+      TELEGRAM_DIGEST_WEEKDAY:
+        type: int
+        default: "0"
+      TELEGRAM_DIGEST_TIME_LOCAL:
+        type: string
+        default: "10:00"
+      TELEGRAM_DIGEST_TIMEZONE:
+        type: string
+        default: Europe/Moscow
+      SKILLRA_API_BASE_URL:
+        type: url
+        required: [local, prod, staging]
+        default:
+          local: "http://localhost:8000"
+          prod: "http://prod-skillra-api:8000"
+          staging: "http://staging-skillra-api:8000"
+      SKILLRA_API_CONNECT_TIMEOUT:
+        type: float
+        default: "5.0"
+      SKILLRA_API_READ_TIMEOUT:
+        type: float
+        default: "15.0"
+      SKILLRA_API_MAX_RETRIES:
+        type: int
+        default: "2"
+      SKILLRA_API_RETRY_BACKOFF_SECONDS:
+        type: float
+        default: "0.5"
+      TELEGRAM_WEBHOOK_URL:
+        type: url
+        required_when:
+          BOT_MODE: webhook
+        default:
+          prod: "https://tg.skillra.ru/webhook"
+          staging: "https://tg.staging.skillra.ru/webhook"
+      TELEGRAM_WEBHOOK_SECRET_TOKEN:
+        type: string
+        secret: true
+        required_when:
+          BOT_MODE: webhook
+        placeholder: changeme-webhook-secret-token
+      TELEGRAM_WEBHOOK_HOST:
+        type: string
+        default: "0.0.0.0"
+      TELEGRAM_WEBHOOK_PORT:
+        type: int
+        default: "8080"
+      TELEGRAM_WEBHOOK_PATH:
+        type: string
+        default: /webhook
+      TELEGRAM_DROP_PENDING_UPDATES:
+        type: bool
+        default: "0"
+      TELEGRAM_DELETE_WEBHOOK_ON_SHUTDOWN:
+        type: bool
+        default: "0"
+      TELEGRAM_PUBLIC_HEALTH_URL:
+        type: url
+        default:
+          prod: "https://tg.skillra.ru/health"
+          staging: "https://tg.staging.skillra.ru/health"
+      TELEGRAM_SMOKE_CHAT_ID:
+        type: int
+        default: ""
+
+  - name: Digest worker
+    variables:
+      DIGEST_POLL_INTERVAL:
+        type: int
+        default: "60"
+      DIGEST_WORKER_HEARTBEAT_PATH:
+        type: string
+        default: /tmp/digest_worker_heartbeat
+      DIGEST_WORKER_HEARTBEAT_MAX_AGE_SECONDS:
+        type: int
+        default: "300"
+      DIGEST_WORKER_METRICS_PATH:
+        type: string
+        default: ""
+      DIGEST_WORKER_HEARTBEAT_METRICS_PATH:
+        type: string
+        default: ""
+
+  - name: Pipeline
+    variables:
+      SKILLRA_REFRESH_HH:
+        type: bool
+        default:
+          local: "0"
+          prod: "1"
+          staging: "1"
+      SKILLRA_USE_RAW_HH_LATEST:
+        type: bool
+        default: "0"
+      SKILLRA_S3_SYNC:
+        type: bool
+        default:
+          local: "0"
+          prod: "1"
+          staging: "1"
+      SKILLRA_REQUIRE_RAW_S3_COMMIT:
+        type: bool
+        default:
+          local: "0"
+          prod: "1"
+          staging: "1"
+      SKILLRA_DATA_RUN_ID:
+        type: string
+        default: ""
+      HH_STORAGE_DIR:
+        type: string
+        default: data/raw/hh
+      HH_QUERY:
+        type: string
+        default: ""
+      HH_LIMIT:
+        type: int
+        default: ""
+      HH_SALARY_ONLY:
+        type: bool
+        default: "0"
+      HH_API_USER_AGENT:
+        type: string
+        default: ""
+      HH_API_TOKEN:
+        type: string
+        secret: true
+        default: ""
+      SKILLRA_HH_API_TOKEN:
+        type: string
+        secret: true
+        default: ""
+      SKILLRA_JOB_SOURCE_MODE:
+        type: string
+        default: hh_html
+      SKILLRA_JOB_FIXTURE_CSV:
+        type: string
+        default: ""
+      SKILLRA_RAW_HH_MIN_ROWS:
+        type: int
+        default: "1"
+      SKILLRA_QUALITY_MIN_ROWS:
+        type: int
+        default: "100"
+      SKILLRA_QUALITY_MAX_DUPLICATE_SHARE:
+        type: float
+        default: "0.0"
+      SKILLRA_QUALITY_MIN_SALARY_KNOWN_SHARE:
+        type: float
+        default: "0.01"
+      DATA_SCHEDULER_UTC_HOUR:
+        type: int
+        default: "2"
+      DATA_SCHEDULER_UTC_MINUTE:
+        type: int
+        default: "0"
+      DATA_SCHEDULER_MAX_RETRIES:
+        type: int
+        default: "3"
+      DATA_SCHEDULER_RETRY_DELAY_SECONDS:
+        type: int
+        default: "60"
+
+  - name: Product controls
+    variables:
+      RATE_LIMIT_PERSONA:
+        type: string
+        default: "30/minute"
+      RATE_LIMIT_MARKET:
+        type: string
+        default: "60/minute"
+      RATE_LIMIT_DEFAULT:
+        type: string
+        default: "200/minute"
+      RATE_LIMIT_USER_API_KEY:
+        type: string
+        default: "100/minute"
+      RATE_LIMIT_IP:
+        type: string
+        default: "30/minute"
+      SUBSCRIPTION_MAX_ATTEMPT:
+        type: int
+        default: "5"
+      SUBSCRIPTION_BACKOFF_SECONDS:
+        type: int
+        default: "3600"
+      SKILLRA_B2B_MIN_COHORT_N:
+        type: int
+        default: "10"
+      SKILLRA_B2B_MIN_CELL_N:
+        type: int
+        default: "5"
+      SKILLRA_BILLING_FAKE_WEBHOOK_ENABLED:
+        type: bool
+        default: "0"
+      SKILLRA_BILLING_FAKE_WEBHOOK_SECRET:
+        type: string
+        secret: true
+        default: changeme-fake-billing-secret
+      SKILLRA_BILLING_SANDBOX_WEBHOOK_ENABLED:
+        type: bool
+        default:
+          local: "0"
+          prod: "0"
+          staging: "1"
+      SKILLRA_BILLING_SANDBOX_WEBHOOK_SECRET:
+        type: string
+        secret: true
+        default: changeme-sandbox-billing-secret
+      SKILLRA_BILLING_SANDBOX_PROVIDER_NAME:
+        type: string
+        default: manual_invoice
+      SKILLRA_BILLING_REAL_PROVIDER_LAUNCH_ENABLED:
+        type: bool
+        default: "0"
+      SKILLRA_EVIDENCE_EXPLAINER_ENABLED:
+        type: bool
+        default: "0"
+      SKILLRA_EVIDENCE_EXPLAINER_ALLOWED_TELEGRAM_USER_IDS:
+        type: string
+        default: ""
+      SKILLRA_EVIDENCE_EXPLAINER_PROD_ENABLE_APPROVED:
+        type: bool
+        default: "0"
+
+  - name: Monitoring
+    variables:
+      GF_SECURITY_ADMIN_USER:
+        type: string
+        default: skillra
+      GF_SECURITY_ADMIN_PASSWORD:
+        type: string
+        secret: true
+        default: changeme-grafana-password
+      SKILLRA_PG_BACKUP_METRICS_FILE:
+        type: string
+        default: ""
+      SKILLRA_PG_RESTORE_DRILL_METRICS_FILE:
+        type: string
+        default: ""
+      SKILLRA_EXPECTED_RUNTIME_ENV:
+        type: string
+        default:
+          local: local
+          prod: prod
+          staging: staging

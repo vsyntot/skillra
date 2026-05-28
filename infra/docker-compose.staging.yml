@@ -1,0 +1,138 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  skillra-web:
+    ports: !reset []
+    build:
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-https://staging.skillra.ru}
+        VITE_TELEGRAM_BOT_USERNAME: ${VITE_TELEGRAM_BOT_USERNAME:-skillra_staging_bot}
+        VITE_SKILLRA_RUNTIME_ENV: ${VITE_SKILLRA_RUNTIME_ENV:-staging}
+        VITE_ENABLE_EVIDENCE_EXPLAINER: ${VITE_ENABLE_EVIDENCE_EXPLAINER:-0}
+        VITE_EVIDENCE_EXPLAINER_ALLOWED_TELEGRAM_USER_IDS: ${VITE_EVIDENCE_EXPLAINER_ALLOWED_TELEGRAM_USER_IDS:-}
+    networks:
+      default:
+      prod_ingress:
+        aliases:
+          - staging-skillra-web
+
+  skillra-api:
+    env_file:
+      - ${SKILLRA_COMPOSE_ENV_FILE:-../.env.staging}
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://skillra:skillra@staging-postgres:5432/skillra}
+      REDIS_URL: ${REDIS_URL:-redis://staging-redis:6379/0}
+      MEILISEARCH_URL: http://staging-meilisearch:7700
+      MINIO_ENDPOINT_URL: http://staging-minio-internal:9000
+    networks:
+      default:
+        aliases:
+          - skillra_api
+      prod_ingress:
+        aliases:
+          - staging-skillra-api
+
+  caddy:
+    ports: !reset []
+    env_file:
+      - ${SKILLRA_COMPOSE_ENV_FILE:-../.env.staging}
+
+  skillra-bot:
+    env_file:
+      - ${SKILLRA_COMPOSE_ENV_FILE:-../.env.staging}
+    environment:
+      SKILLRA_API_BASE_URL: http://staging-skillra-api:${SKILLRA_API_PORT:-8000}
+      REDIS_URL: ${REDIS_URL:-redis://staging-redis:6379/0}
+    networks:
+      default:
+      prod_ingress:
+        aliases:
+          - staging-skillra-bot
+    profiles:
+      - telegram
+
+  migrator:
+    env_file:
+      - ${SKILLRA_COMPOSE_ENV_FILE:-../.env.staging}
+
+  pipeline_runner:
+    env_file:
+      - ${SKILLRA_COMPOSE_ENV_FILE:-../.env.staging}
+
+  minio:
+    env_file:
+      - ${SKILLRA_COMPOSE_ENV_FILE:-../.env.staging}
+    networks:
+      default:
+        aliases:
+          - staging-minio-internal
+      prod_ingress:
+        aliases:
+          - staging-minio
+
+  minio-init:
+    env_file:
+      - ${SKILLRA_COMPOSE_ENV_FILE:-../.env.staging}
+
+  grafana:
+    env_file:
+      - ${SKILLRA_COMPOSE_ENV_FILE:-../.env.staging}
+    networks:
+      default:
+      prod_ingress:
+        aliases:
+          - staging-grafana
+
+  postgres-exporter:
+    env_file:
+      - ${SKILLRA_COMPOSE_ENV_FILE:-../.env.staging}
+
+  data-scheduler:
+    env_file:
+      - ${SKILLRA_COMPOSE_ENV_FILE:-../.env.staging}
+    profiles:
+      - scheduler
+
+  digest-worker:
+    env_file:
+      - ${SKILLRA_COMPOSE_ENV_FILE:-../.env.staging}
+    profiles:
+      - digest
+
+  alertmanager:
+    ports: !reset []
+    logging: *default-logging
+
+  prometheus:
+    networks:
+      default:
+      prod_ingress:
+        aliases:
+          - staging-prometheus
+
+  postgres:
+    networks:
+      default:
+        aliases:
+          - staging-postgres
+
+  redis:
+    networks:
+      default:
+        aliases:
+          - staging-redis
+
+  meilisearch:
+    networks:
+      default:
+        aliases:
+          - staging-meilisearch
+
+networks:
+  prod_ingress:
+    name: infra_default
+    external: true

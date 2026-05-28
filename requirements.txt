@@ -1,12 +1,3 @@
-pandas
-numpy
-matplotlib
-pyarrow
-seaborn
-scikit-learn
-requests
-beautifulsoup4
-nbformat
-notebook
-ipykernel
-pytest
+-r requirements/base.txt
+-r requirements/dev.txt
+-r requirements/notebook.txt

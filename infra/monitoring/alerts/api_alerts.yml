@@ -1,0 +1,90 @@
+groups:
+  - name: api
+    interval: 30s
+    rules:
+      - alert: APIHighErrorRate
+        expr: rate(skillra_api_request_errors_total[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High API error rate"
+          description: "API error rate is {{ $value | humanize }} errors/sec (threshold: 0.1)"
+
+      - alert: DataStoreNotReady
+        expr: sum(skillra_datastore_rows_total{dataset="features"}) == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DataStore features dataset is empty"
+          description: "Features dataset has 0 rows for {{ $labels.job }}"
+
+      - alert: APIDown
+        expr: up{job="skillra-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Skillra API is down"
+          description: "skillra-api has been down for more than 1 minute"
+
+      - alert: VacancyIndexerLastRunFailed
+        expr: skillra_vacancy_indexer_last_failure_timestamp_seconds > skillra_vacancy_indexer_last_success_timestamp_seconds
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Vacancy indexer last run failed"
+          description: "Last vacancy indexer failure is newer than the last success. Check /v1/admin/indexer-status and skillra-api logs."
+
+      - alert: DataStoreReloadLastRunFailed
+        expr: skillra_datastore_reload_last_failure_timestamp_seconds > skillra_datastore_reload_last_success_timestamp_seconds
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DataStore reload last run failed"
+          description: "Last reload-data failure is newer than the last success. Check /v1/health, /v1/admin/indexer-status and skillra-api logs."
+
+      - alert: DataStoreReloadRedisPublishFailures
+        expr: increase(skillra_datastore_reload_redis_publish_failures_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DataStore reload Redis fan-out failed"
+          description: "reload-data succeeded locally but failed to publish the datastore_reload event to Redis. Other API replicas may still serve the previous dataset."
+
+      - alert: VacancyIndexerNoRecentSuccess
+        expr: (time() - skillra_vacancy_indexer_last_success_timestamp_seconds > 93600) and skillra_vacancy_indexer_last_success_timestamp_seconds > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Vacancy indexer has no recent successful run"
+          description: "No successful vacancy indexer run for more than 26 hours. Trigger /v1/admin/index-meilisearch or inspect the refresh pipeline."
+
+      - alert: EvidenceExplainerHighGuardrailRate
+        expr: |
+          (
+            sum(rate(skillra_evidence_explainer_requests_total{status=~"fallback|blocked"}[15m]))
+            /
+            sum(rate(skillra_evidence_explainer_requests_total{status=~"answered|fallback|blocked"}[15m]))
+          ) > 0.5
+          and sum(increase(skillra_evidence_explainer_requests_total{status=~"answered|fallback|blocked"}[15m])) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Evidence explainer guardrail rate is high"
+          description: "More than half of controlled explainer requests are fallback/blocked. Check eval drift, dataset trust gates and support reports."
+
+      - alert: EvidenceExplainerUnexpectedProdUse
+        expr: increase(skillra_evidence_explainer_requests_total{runtime_env="prod",status!="disabled"}[15m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Evidence explainer used in production"
+          description: "A non-disabled evidence explainer response was served in prod. Confirm explicit approval, allowlist and rollback flag state."

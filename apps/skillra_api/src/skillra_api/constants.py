@@ -1,0 +1,4 @@
+API_VERSION = "0.1.0"
+
+SERVICE_TOKEN_HEADER = "X-Skillra-Token"
+ADMIN_TOKEN_HEADER = "X-Admin-Token"

@@ -1,9 +1,41 @@
 """Market-level aggregations for Skillra Navigator views."""
+
 from __future__ import annotations
 
 from typing import Iterable
 
 import pandas as pd
+
+CONFIDENCE_HIGH_MIN_ROWS = 80
+CONFIDENCE_HIGH_MIN_SALARY_ROWS = 30
+CONFIDENCE_HIGH_MIN_SALARY_COVERAGE = 0.30
+CONFIDENCE_MEDIUM_MIN_ROWS = 20
+CONFIDENCE_MEDIUM_MIN_SALARY_ROWS = 5
+CONFIDENCE_MEDIUM_MIN_SALARY_COVERAGE = 0.10
+
+
+def market_confidence(
+    vacancy_count: int,
+    salary_sample_size: int | None = None,
+    salary_coverage_share: float | None = None,
+) -> str:
+    """Return a compact confidence label for user-facing market advice."""
+
+    salary_rows = int(salary_sample_size or 0)
+    coverage = float(salary_coverage_share or 0.0)
+    if (
+        vacancy_count >= CONFIDENCE_HIGH_MIN_ROWS
+        and salary_rows >= CONFIDENCE_HIGH_MIN_SALARY_ROWS
+        and coverage >= CONFIDENCE_HIGH_MIN_SALARY_COVERAGE
+    ):
+        return "high"
+    if (
+        vacancy_count >= CONFIDENCE_MEDIUM_MIN_ROWS
+        and salary_rows >= CONFIDENCE_MEDIUM_MIN_SALARY_ROWS
+        and coverage >= CONFIDENCE_MEDIUM_MIN_SALARY_COVERAGE
+    ):
+        return "medium"
+    return "low"
 
 
 def _derive_domain(df: pd.DataFrame, domain_cols: Iterable[str]) -> pd.Series:
@@ -42,6 +74,20 @@ def _format_top_skills(row: pd.Series) -> str:
     return ", ".join([f"{_clean_name(col)} ({share:.0%})" for col, share in non_zero.head(top_n).items()])
 
 
+def _quantile_or_na(series: pd.Series, quantile: float) -> float | object:
+    clean = series.dropna()
+    if clean.empty:
+        return pd.NA
+    return float(clean.quantile(quantile))
+
+
+def _median_or_na(series: pd.Series) -> float | object:
+    clean = series.dropna()
+    if clean.empty:
+        return pd.NA
+    return float(clean.median())
+
+
 def build_market_view(df: pd.DataFrame) -> pd.DataFrame:
     """Aggregate vacancy market view by role, grade, city, and optionally domain."""
 
@@ -60,6 +106,9 @@ def build_market_view(df: pd.DataFrame) -> pd.DataFrame:
 
     temp = df.copy()
     group_cols = required_cols.copy() + [grade_col]
+    for geo_col in ("country", "region", "city_normalized", "geo_scope"):
+        if geo_col in df.columns:
+            group_cols.append(geo_col)
 
     domain_cols = [col for col in df.columns if col.startswith("domain_")]
     if domain_cols:
@@ -83,24 +132,35 @@ def build_market_view(df: pd.DataFrame) -> pd.DataFrame:
     if "tech_stack_size" not in df.columns:
         temp["tech_stack_size"] = pd.NA
 
+    salary_metric_col = "_salary_metric_rub"
+    temp[salary_metric_col] = pd.to_numeric(df[salary_col], errors="coerce")
+    if "salary_disclosed" in df.columns:
+        salary_disclosed = df["salary_disclosed"].fillna(False).astype(bool)
+        temp[salary_metric_col] = temp[salary_metric_col].where(salary_disclosed)
+
     aggregations = {
         "vacancy_count_total": (salary_col, "size"),
-        "vacancy_count_salary": (salary_col, "count"),
-        "salary_median": (salary_col, "median"),
-        "salary_q25": (salary_col, lambda s: s.quantile(0.25)),
-        "salary_q75": (salary_col, lambda s: s.quantile(0.75)),
+        "vacancy_count_salary": (salary_metric_col, "count"),
+        "salary_median": (salary_metric_col, _median_or_na),
+        "salary_q25": (salary_metric_col, lambda s: _quantile_or_na(s, 0.25)),
+        "salary_q75": (salary_metric_col, lambda s: _quantile_or_na(s, 0.75)),
         "junior_friendly_share": ("junior_friendly_flag", "mean"),
         "remote_share": ("remote_flag", "mean"),
-        "median_tech_stack_size": ("tech_stack_size", "median"),
+        "median_tech_stack_size": ("tech_stack_size", _median_or_na),
     }
 
-    summary = (
-        temp.groupby(group_cols, observed=True)
-        .agg(**aggregations)
-        .reset_index()
-    )
+    summary = temp.groupby(group_cols, observed=True).agg(**aggregations).reset_index()
 
     summary["vacancy_count"] = summary["vacancy_count_total"]
+    summary["sample_size"] = summary["vacancy_count_total"]
+    summary["salary_sample_size"] = summary["vacancy_count_salary"]
+    summary["salary_coverage_share"] = (
+        summary["salary_sample_size"] / summary["sample_size"].where(summary["sample_size"] > 0)
+    ).fillna(0.0)
+    summary["confidence"] = [
+        market_confidence(int(row.sample_size), int(row.salary_sample_size), float(row.salary_coverage_share))
+        for row in summary.itertuples(index=False)
+    ]
 
     skill_cols = [col for col in df.columns if col.startswith("skill_") or col.startswith("has_")]
     if skill_cols:

@@ -16,6 +16,7 @@
 - `salary_mid`: середина зарплатного диапазона (или единственная граница, если задан только один конец).
 - `salary_range_width`: разница между `salary_to` и `salary_from` (0, если задана одна граница).
 - `salary_is_exact`: `True`, когда указана только одна граница.
+- `salary_disclosed`: `True`, если в исходной вакансии указана хотя бы одна граница зарплаты.
 
 ## Время
 - `published_at_raw`: исходный текст о публикации из карточки вакансии.
@@ -94,3 +95,4 @@
 - `core_data_skills_count`: количество среди SQL, Excel, BI (PowerBI/Tableau), Python/R.
 - `ml_stack_count`: количество среди sklearn, PyTorch, TensorFlow, Airflow, Spark, Kafka.
 - `tech_stack_size`: общее число тех-флагов `has_*`/`skill_*`, равных `True`.
+- `dataset_scope`: охват сырого датасета (`all_vacancies` для полного сбора или `salary_disclosed` для salary-only режима).

@@ -1,4 +1,5 @@
 """Visualization utilities for reports."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,11 +8,10 @@ from typing import Iterable, Sequence
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from .config import FIGURES_DIR, ensure_directories
 from . import eda as eda_mod
+from .config import FIGURES_DIR
 
-
-ensure_directories()
+# NOTE: Import-time mkdir/IO is запрещён. Директории создаются только при сохранении артефактов.
 
 BAR_FIGSIZE = (10, 6)
 HEATMAP_FIGSIZE = (10, 7)
@@ -227,9 +227,7 @@ def salary_by_role_flags_box(
     return _finalize_figure(fig, output_path, return_fig)
 
 
-def salary_by_grade_city_heatmap(
-    summary_df: pd.DataFrame, value_col: str = "median", return_fig: bool = False
-):
+def salary_by_grade_city_heatmap(summary_df: pd.DataFrame, value_col: str = "median", return_fig: bool = False):
     """Heatmap of salary metric by grade (rows) and city tier (columns)."""
 
     _require_columns(summary_df, ["grade", "city_tier", value_col], "salary_by_grade_city_heatmap")
@@ -255,7 +253,9 @@ def work_mode_share_by_city(df: pd.DataFrame, return_fig: bool = False):
     _require_columns(df, ["city_tier", "work_mode"], "work_mode_share_by_city")
     df_local = df.copy()
     df_local["work_mode"] = pd.Categorical(
-        df_local["work_mode"], categories=_ordered_categories(df_local["work_mode"].unique(), WORK_MODE_ORDER), ordered=True
+        df_local["work_mode"],
+        categories=_ordered_categories(df_local["work_mode"].unique(), WORK_MODE_ORDER),
+        ordered=True,
     )
     pivot = pd.crosstab(df_local["city_tier"], df_local["work_mode"], normalize="index")
     pivot = pivot[_ordered_categories(pivot.columns, WORK_MODE_ORDER)]
@@ -402,11 +402,7 @@ def skill_heatmap(
     freq = numeric_skills.mean().sort_values(ascending=False)
     top_skills = freq.head(top_n).index
 
-    grouped = (
-        pd.concat([df[[index_col]], numeric_skills[top_skills]], axis=1)
-        .groupby(index_col)
-        .mean()
-    )
+    grouped = pd.concat([df[[index_col]], numeric_skills[top_skills]], axis=1).groupby(index_col).mean()
     pivot = grouped.fillna(0.0).astype(float)
     if pivot.empty:
         raise ValueError("Нет данных для построения heatmap")
@@ -830,9 +826,7 @@ def distribution_with_boxplot(
     if series.empty:
         raise ValueError("distribution_with_boxplot: no numeric data to plot")
 
-    fig, (ax_hist, ax_box) = plt.subplots(
-        2, 1, figsize=figsize, gridspec_kw={"height_ratios": [3, 1]}, sharex=True
-    )
+    fig, (ax_hist, ax_box) = plt.subplots(2, 1, figsize=figsize, gridspec_kw={"height_ratios": [3, 1]}, sharex=True)
     ax_hist.hist(series, bins=bins, color="steelblue", edgecolor="white")
     ax_hist.set_ylabel("Количество")
     ax_hist.set_title(f"Распределение {column}")

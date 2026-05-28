@@ -1,0 +1,27 @@
+FROM python:3.11.10-slim
+
+WORKDIR /workspace
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PIP_ROOT_USER_ACTION=ignore
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN groupadd -g 10001 skillra && \
+    useradd -m -u 10001 -g 10001 -s /bin/bash skillra
+
+RUN apt-get update -qq >/dev/null && \
+    apt-get install -y -qq --no-install-recommends build-essential >/dev/null 2>&1 && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY requirements requirements
+RUN pip install --disable-pip-version-check --root-user-action=ignore --no-cache-dir -r requirements/lock/telegram_bot.lock.txt && \
+    pip check
+
+COPY . .
+
+RUN pip install --disable-pip-version-check --root-user-action=ignore --no-cache-dir -e apps/telegram_bot -e apps/digest_worker
+
+USER skillra
+
+CMD ["python", "-m", "digest_worker"]

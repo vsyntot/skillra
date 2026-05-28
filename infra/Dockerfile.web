@@ -1,0 +1,7 @@
+FROM node:20-alpine
+WORKDIR /app
+ENV npm_config_update_notifier=false
+COPY apps/skillra_web/package*.json ./
+RUN npm ci --loglevel=error --no-audit --no-fund --no-update-notifier
+COPY apps/skillra_web/ ./
+EXPOSE 5173

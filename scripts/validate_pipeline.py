@@ -1,4 +1,5 @@
 """Quick regression script to validate cleaning + save pipeline."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -43,14 +44,8 @@ def main() -> None:
         return
 
     dtype_after = str(df["salary_gross"].dtype) if "salary_gross" in df.columns else "missing"
-    unwanted_after = (
-        df["salary_gross"].isin(UNKNOWN_MARKERS).sum() if "salary_gross" in df.columns else 0
-    )
-    ok = (
-        "salary_gross" in df.columns
-        and dtype_after == "boolean"
-        and unwanted_after == 0
-    )
+    unwanted_after = df["salary_gross"].isin(UNKNOWN_MARKERS).sum() if "salary_gross" in df.columns else 0
+    ok = "salary_gross" in df.columns and dtype_after == "boolean" and unwanted_after == 0
 
     vacancy_age_ok = "vacancy_age_days" in df_features.columns
     if vacancy_age_ok:
